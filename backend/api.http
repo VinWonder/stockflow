@@ -1,0 +1,64 @@
+### Try the API from VS Code: install "REST Client", then click "Send Request" above each block.
+@base = http://127.0.0.1:8000/api
+
+### 1. Log in (copy "access" into @token below)
+POST {{base}}/auth/token/
+Content-Type: application/json
+
+{ "username": "admin", "password": "admin12345" }
+
+###
+@token = PASTE_ACCESS_TOKEN_HERE
+
+### 2. Dashboard
+GET {{base}}/dashboard/
+Authorization: Bearer {{token}}
+
+### 3. Stores with stock value, low and out-of-stock counts
+GET {{base}}/locations/
+Authorization: Bearer {{token}}
+
+### 4. Stock at one store (add &low=1 for low stock only)
+GET {{base}}/stock/?location=1&search=paint
+Authorization: Bearer {{token}}
+
+### 5. Receive a supplier delivery (posts into stock immediately)
+POST {{base}}/receipts/
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "location": 1, "supplier": 1, "supplied_on": "2026-10-25", "invoice_number": "INV-889", "amount_paid": "20000",
+  "lines": [ { "variant": 1, "quantity": "40", "unit_cost": "730" } ] }
+
+### 6. Transfer godown → shop (admin: approved at once)
+POST {{base}}/transfers/
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "source": 1, "destination": 3, "lines": [ { "variant": 1, "quantity": "10" } ] }
+
+### 7. Dispatch it (stock leaves the godown), then receive at the shop
+POST {{base}}/transfers/1/dispatch/
+Authorization: Bearer {{token}}
+
+###
+POST {{base}}/transfers/1/receive/
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "quantities": { "1": "10" } }
+
+### 8. Try an SMS/WhatsApp command without sending a real message
+POST {{base}}/messaging/simulate/
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "text": "REMOVE GDN: PNT 4L WHITE 2 #damaged" }
+
+### 9. Requests waiting for you
+GET {{base}}/requests/?status=confirmed
+Authorization: Bearer {{token}}
+
+### 10. Item history (stock card)
+GET {{base}}/movements/?location=1&variant=1
+Authorization: Bearer {{token}}
