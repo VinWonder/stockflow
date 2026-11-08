@@ -1,0 +1,36 @@
+# Render Blueprint: Render → New → Blueprint → pick this repository.
+# The database lives on Neon (free, doesn't expire); paste its connection string as DATABASE_URL when asked.
+services:
+  - type: web
+    name: stockflow
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: INBOUND_TOKEN
+        generateValue: true
+      - key: DEBUG
+        value: "False"
+      - key: ALLOWED_HOSTS
+        value: localhost
+      - key: TIME_ZONE
+        value: Africa/Nairobi
+      - key: CURRENCY
+        value: KES
+      - key: WEB_CONCURRENCY
+        value: "2"
+      - key: SMS_BACKEND
+        value: console
+      - key: WHATSAPP_BACKEND
+        value: console

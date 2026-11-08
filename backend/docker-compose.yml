@@ -1,0 +1,26 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: stockflow
+      POSTGRES_USER: stock_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-this}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stock_user -d stockflow"]
+      interval: 5s
+      retries: 10
+  api:
+    build: {context: .., dockerfile: backend/Dockerfile}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://stock_user:${POSTGRES_PASSWORD:-change-this}@db:5432/stockflow
+    depends_on:
+      db: {condition: service_healthy}
+    ports: ["8000:8000"]
+    volumes: [media:/app/media]
+volumes:
+  pgdata:
+  media:

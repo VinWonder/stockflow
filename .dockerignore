@@ -1,0 +1,12 @@
+app/
+.idea/
+.vscode/
+**/node_modules
+**/__pycache__
+**/*.pyc
+web/dist
+backend/.venv
+backend/.env
+backend/db.sqlite3
+backend/media
+backend/staticfiles
