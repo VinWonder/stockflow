@@ -1,0 +1,32 @@
+{
+  "name": "stockflow-web",
+  "private": true,
+  "version": "1.0.0",
+  "description": "StockFlow — hardware stock control for godown and shops (installable web app).",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "icons": "pwa-assets-generator"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.106.1",
+    "@zxing/browser": "^0.1.5",
+    "@zxing/library": "^0.21.3",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.30.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "@vite-pwa/assets-generator": "^0.2.6",
+    "@vitejs/plugin-react": "^4.7.0",
+    "typescript": "5.7",
+    "vite": "^6.4.5",
+    "vite-plugin-pwa": "^0.21.2"
+  }
+}
