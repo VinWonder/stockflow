@@ -1,0 +1,44 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Backend: runserver (phones on Wi-Fi can reach it)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/backend/manage.py",
+      "args": [
+        "runserver",
+        "0.0.0.0:8000"
+      ],
+      "cwd": "${workspaceFolder}/backend",
+      "django": true
+    },
+    {
+      "name": "Backend: tests",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/backend/manage.py",
+      "args": [
+        "test"
+      ],
+      "cwd": "${workspaceFolder}/backend",
+      "django": true
+    },
+    {
+      "name": "Web app: dev server (http://localhost:5173)",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "npm run dev",
+      "cwd": "${workspaceFolder}/web"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Backend + Web app",
+      "configurations": [
+        "Backend: runserver (phones on Wi-Fi can reach it)",
+        "Web app: dev server (http://localhost:5173)"
+      ]
+    }
+  ]
+}

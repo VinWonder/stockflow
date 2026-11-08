@@ -1,0 +1,7 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/bin/python",
+  "python.analysis.extraPaths": ["${workspaceFolder}/backend"],
+  "files.exclude": { "**/__pycache__": true },
+  "[python]": { "editor.formatOnSave": true, "editor.defaultFormatter": "ms-python.black-formatter" },
+  "black-formatter.args": ["--line-length", "120"]
+}

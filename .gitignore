@@ -1,0 +1,16 @@
+# Secrets and local data: never commit these
+.env
+*.sqlite3
+backend/media/
+backend/staticfiles/
+
+# Dependencies and build output
+.venv/
+node_modules/
+web/dist/
+__pycache__/
+*.pyc
+
+# Old Flutter app (replaced by web/) and editor files
+app/
+.idea/
