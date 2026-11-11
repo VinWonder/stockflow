@@ -10,6 +10,8 @@ interface Auth {
   status: Status;
   me: Me | null;
   login: (username: string, password: string) => Promise<void>;
+  /** Use tokens the server just issued (after sign-up or a password reset). */
+  signInWith: (access: string, refresh: string) => Promise<void>;
   logout: () => void;
   refreshMe: () => Promise<void>;
 }
@@ -43,19 +45,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refreshMe().catch(() => setStatus('signedOut'));
   }, [logout, refreshMe]);
 
+  const signInWith = useCallback(
+    async (access: string, refresh: string) => {
+      tokens.set(access, refresh);
+      await refreshMe();
+    },
+    [refreshMe],
+  );
+
   const login = useCallback(
     async (username: string, password: string) => {
       const data = await api.post<{ access: string; refresh: string }>('/auth/token/', {
         username: username.trim(),
         password,
       });
-      tokens.set(data.access, data.refresh);
-      await refreshMe();
+      await signInWith(data.access, data.refresh);
     },
-    [refreshMe],
+    [signInWith],
   );
 
-  const value = useMemo(() => ({ status, me, login, logout, refreshMe }), [status, me, login, logout, refreshMe]);
+  const value = useMemo(() => ({ status, me, login, signInWith, logout, refreshMe }), [status, me, login, signInWith, logout, refreshMe]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

@@ -1,21 +1,34 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronsUpDown, Package, Plus, ScanLine, Search, Store, Truck } from 'lucide-react';
+import { ChevronsUpDown, Package, PackagePlus, Plus, Search, Store, Truck } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { api } from '../lib/api';
-import { qty, toD } from '../lib/format';
+import { useAuth } from '../lib/auth';
+import { money, qty, toD } from '../lib/format';
 import { isGodown, kindLabel, type Location, type StockLevel, type Supplier, type Variant } from '../lib/models';
 import { useSuppliers } from '../lib/queries';
 import { colors, fromHex } from '../lib/theme';
-import { Card, EmptyState, ErrorView, LoadingList, Progress, StoreAvatar } from './common';
+import { Card, EmptyState, ErrorView, LoadingList, Pill, Progress, StoreAvatar } from './common';
 import { Dialog, Sheet, useOverlay } from './overlay';
-import { useScanner } from './Scanner';
+import { useProductForm } from './ProductForm';
 
 export type Picked = { variant: Variant; available: number | null };
 
-function VariantSheet({ locationId, inStockOnly, close }: { locationId?: number | null; inStockOnly: boolean; close: (v?: Picked) => void }) {
-  const overlay = useOverlay();
-  const scan = useScanner();
+interface PickOptions {
+  locationId?: number | null;
+  inStockOnly?: boolean;
+  /** Receiving from a supplier: list their products first. */
+  supplier?: Supplier | null;
+  /** Show "New product" (admins only). */
+  allowCreate?: boolean;
+  /** Show cost instead of selling price. */
+  showCost?: boolean;
+}
+
+function VariantSheet({ opts, close }: { opts: PickOptions; close: (v?: Picked) => void }) {
+  const { locationId, inStockOnly = false, supplier, allowCreate = false, showCost = false } = opts;
+  const productForm = useProductForm();
+  const [tab, setTab] = useState<'supplier' | 'all'>(supplier ? 'supplier' : 'all');
   const [term, setTerm] = useState('');
   const [results, setResults] = useState<Picked[]>([]);
   const [loading, setLoading] = useState(false);
@@ -30,13 +43,17 @@ function VariantSheet({ locationId, inStockOnly, close }: { locationId?: number 
       try {
         const stock = locationId == null
           ? []
-          : await api.list<StockLevel>('/stock/', { location: locationId, search, in_stock: inStockOnly ? 1 : undefined });
+          : await api.list<StockLevel>('/stock/', { location: locationId, search, in_stock: inStockOnly ? 1 : undefined, page_size: 300 });
         let rows: Picked[];
         if (inStockOnly) {
           rows = stock.map((s) => ({ variant: s.variant, available: toD(s.quantity) }));
         } else {
           const byId = new Map(stock.map((s) => [s.variant.id, toD(s.quantity)]));
-          const variants = await api.list<Variant>('/variants/', { search, is_active: true });
+          const variants = await api.list<Variant>('/variants/', {
+            search,
+            is_active: true,
+            supplier: tab === 'supplier' && supplier ? supplier.id : undefined,
+          });
           rows = variants.map((v) => ({ variant: v, available: locationId == null ? null : (byId.get(v.id) ?? 0) }));
         }
         if (mine === seq.current) setResults(rows);
@@ -46,29 +63,23 @@ function VariantSheet({ locationId, inStockOnly, close }: { locationId?: number 
         if (mine === seq.current) setLoading(false);
       }
     },
-    [locationId, inStockOnly],
+    [locationId, inStockOnly, tab, supplier],
   );
 
   useEffect(() => {
-    if (term.length >= 2 || term.length === 0) {
-      const t = window.setTimeout(() => load(term.trim()), term ? 250 : 0);
-      return () => window.clearTimeout(t);
-    }
+    const t = window.setTimeout(() => load(term.trim()), term ? 250 : 0);
+    return () => window.clearTimeout(t);
   }, [term, load]);
 
-  const onScan = async () => {
-    const code = await scan();
-    if (!code) return;
-    try {
-      const v = await api.get<Variant>(`/variants/barcode/${encodeURIComponent(code)}/`);
-      let available: number | null = null;
-      if (locationId != null) {
-        const s = await api.list<StockLevel>('/stock/', { location: locationId, variant: v.id });
-        available = s.length ? toD(s[0].quantity) : 0;
-      }
-      close({ variant: v, available });
-    } catch (e) {
-      overlay.error(e);
+  const create = async () => {
+    const p = await productForm({ supplier });
+    if (!p) return;
+    const active = p.variants.filter((v) => v.is_active !== false);
+    if (active.length === 1) {
+      close({ variant: active[0], available: locationId == null ? null : 0 });
+    } else {
+      setTab('all');
+      setTerm(p.name);
     }
   };
 
@@ -82,37 +93,64 @@ function VariantSheet({ locationId, inStockOnly, close }: { locationId?: number 
             autoFocus
             type="search"
             enterKeyHint="search"
-            placeholder="Name, code, size, colour or SKU"
+            placeholder="Name, size, colour or code"
             value={term}
             onChange={(e) => setTerm(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && load(term.trim())}
           />
         </div>
-        <button className="icon-btn tonal" onClick={onScan} aria-label="Scan barcode">
-          <ScanLine size={20} />
-        </button>
       </div>
+      {supplier && !inStockOnly && (
+        <div className="tabs" style={{ position: 'static', margin: '0 16px' }} role="tablist">
+          <button role="tab" aria-selected={tab === 'supplier'} className={tab === 'supplier' ? 'on' : ''} onClick={() => setTab('supplier')}>
+            From {supplier.name.split(' ')[0]}
+          </button>
+          <button role="tab" aria-selected={tab === 'all'} className={tab === 'all' ? 'on' : ''} onClick={() => setTab('all')}>
+            All products
+          </button>
+        </div>
+      )}
       {loading ? <Progress /> : <div style={{ height: 2 }} />}
-      <div className="sheet-body" style={{ flex: 1, paddingTop: 4 }}>
+      <div className="sheet-body" style={{ flex: 1, paddingTop: 8 }}>
+        {allowCreate && (
+          <button className="tile" onClick={create} style={{ marginBottom: 6 }}>
+            <span className="avatar"><PackagePlus size={20} /></span>
+            <div className="col grow">
+              <span className="bold">New product</span>
+              <span className="small muted">Not in the list? Add it with its sizes, colours and prices</span>
+            </div>
+          </button>
+        )}
         {error ? (
           <ErrorView error={error} onRetry={() => load(term.trim())} />
         ) : results.length === 0 && !loading ? (
-          <EmptyState icon={Package} title="No matching products" />
+          <EmptyState
+            icon={Package}
+            title={tab === 'supplier' ? `Nothing from ${supplier?.name} yet` : inStockOnly ? 'Nothing in stock matches' : 'No matching products'}
+            message={tab === 'supplier' ? 'Products appear here after their first delivery. Look in "All products".' : undefined}
+            action={tab === 'supplier' ? 'All products' : undefined}
+            onAction={() => setTab('all')}
+          />
         ) : (
           <div className="list">
             {results.map((r) => {
               const empty = r.available != null && r.available <= 0;
+              const v = r.variant;
               return (
-                <Card key={r.variant.id} onClick={() => close(r)} style={{ padding: '12px 16px' }}>
+                <Card key={v.id} onClick={() => close(r)} style={{ padding: '12px 16px' }}>
                   <div className="row">
                     <div className="col grow">
-                      <span className="bold">{r.variant.product_name}</span>
-                      <span className="small muted">{[r.variant.options, r.variant.sku].filter(Boolean).join(' · ')}</span>
+                      <span className="bold">{v.product_name}</span>
+                      <div className="wrap" style={{ gap: 6, marginTop: 3 }}>
+                        {v.size && <Pill text={v.size} color={colors.steel} />}
+                        {v.colour && <Pill text={v.colour} color={colors.violet} />}
+                        <span className="tiny muted">{showCost ? `cost ${money(v.cost_price)}` : money(v.selling_price)}</span>
+                      </div>
                     </div>
                     {r.available != null && (
                       <div className="col right">
-                        <span className="heavy" style={{ color: empty ? colors.danger : undefined }}>{qty(r.available)}</span>
-                        <span className="tiny muted">{r.variant.unit}</span>
+                        <span className="heavy" style={{ color: empty ? colors.danger : undefined }}>{empty ? 'None' : qty(r.available)}</span>
+                        <span className="tiny muted">{v.unit} here</span>
                       </div>
                     )}
                   </div>
@@ -126,36 +164,56 @@ function VariantSheet({ locationId, inStockOnly, close }: { locationId?: number 
   );
 }
 
-/** Search products (and see stock at locationId); resolves with the chosen variant and what's available. */
+/** Search products by name / size / colour (and see stock at locationId); resolves with the chosen item. */
 export function usePickVariant() {
   const { open } = useOverlay();
-  return (opts: { locationId?: number | null; inStockOnly?: boolean } = {}) =>
-    open<Picked>((close) => <VariantSheet locationId={opts.locationId} inStockOnly={opts.inStockOnly ?? false} close={close} />);
+  const { me } = useAuth();
+  return (opts: PickOptions = {}) =>
+    open<Picked>((close) => <VariantSheet opts={{ ...opts, allowCreate: (opts.allowCreate ?? false) && !!me?.is_admin }} close={close} />);
+}
+
+export interface PickLocationOptions {
+  title?: string;
+  /** Short note under a store's name, e.g. "Selling switched off". */
+  note?: (l: Location) => string | null;
+  disabled?: (l: Location) => boolean;
 }
 
 export function usePickLocation() {
   const { open } = useOverlay();
-  return (options: Location[], title = 'Choose a store') =>
-    open<Location>((close) => (
-      <Sheet onClose={() => close()} title={title}>
+  return (options: Location[], titleOrOpts: string | PickLocationOptions = 'Choose a store') => {
+    const o: PickLocationOptions = typeof titleOrOpts === 'string' ? { title: titleOrOpts } : titleOrOpts;
+    const shops = options.filter((l) => !isGodown(l));
+    const godowns = options.filter(isGodown);
+    const row = (l: Location, close: (l?: Location) => void) => {
+      const off = o.disabled?.(l) ?? false;
+      const note = o.note?.(l);
+      return (
+        <button key={l.id} className="tile" disabled={off} style={off ? { opacity: 0.5, cursor: 'default' } : undefined} onClick={() => !off && close(l)}>
+          <StoreAvatar color={fromHex(l.color)} godown={isGodown(l)} size={40} />
+          <div className="col grow">
+            <span className="bold">{l.name}</span>
+            <span className="small muted">{[l.code, kindLabel(l), note].filter(Boolean).join(' · ')}</span>
+          </div>
+        </button>
+      );
+    };
+    return open<Location>((close) => (
+      <Sheet onClose={() => close()} title={o.title ?? 'Choose a store'}>
         <div className="sheet-body">
           {options.length === 0 && <EmptyState icon={Store} title="No stores to choose from" />}
-          {options.map((l) => (
-            <button key={l.id} className="tile" onClick={() => close(l)}>
-              <StoreAvatar color={fromHex(l.color)} godown={isGodown(l)} size={40} />
-              <div className="col grow">
-                <span className="bold">{l.name}</span>
-                <span className="small muted">{l.code} · {kindLabel(l)}</span>
-              </div>
-            </button>
-          ))}
+          {shops.length > 0 && godowns.length > 0 && <div className="tiny muted bold" style={{ padding: '4px 16px' }}>SHOPS</div>}
+          {shops.map((l) => row(l, close))}
+          {shops.length > 0 && godowns.length > 0 && <div className="tiny muted bold" style={{ padding: '12px 16px 4px' }}>GODOWNS / STORES</div>}
+          {godowns.map((l) => row(l, close))}
         </div>
       </Sheet>
     ));
+  };
 }
 
 /** A tappable field that shows the chosen store. */
-export function LocationField({ label, value, onClick }: { label: string; value: Location | null; onClick: () => void }) {
+export function LocationField({ label, value, onClick, hint }: { label: string; value: Location | null; onClick: () => void; hint?: string }) {
   return (
     <Card onClick={onClick} style={{ padding: '12px 14px' }}>
       <div className="row">
@@ -163,6 +221,7 @@ export function LocationField({ label, value, onClick }: { label: string; value:
         <div className="col grow">
           <span className="tiny muted">{label}</span>
           <span className="bold" style={{ fontSize: 15 }}>{value?.name ?? 'Tap to choose'}</span>
+          {(hint || value) && <span className="tiny muted">{hint ?? kindLabel(value!)}</span>}
         </div>
         <ChevronsUpDown size={20} />
       </div>
@@ -215,7 +274,7 @@ function SupplierSheet({ close }: { close: (s?: Supplier) => void }) {
   const list = useSuppliers();
   const addSupplier = useAddSupplier();
   return (
-    <Sheet onClose={() => close()} tall>
+    <Sheet onClose={() => close()} tall title="Supplier">
       <div className="sheet-body">
         <button
           className="tile"
@@ -237,7 +296,9 @@ function SupplierSheet({ close }: { close: (s?: Supplier) => void }) {
               <span className="avatar">{s.name[0]?.toUpperCase() ?? <Truck size={20} />}</span>
               <div className="col grow">
                 <span className="bold">{s.name}</span>
-                {s.phone && <span className="small muted">{s.phone}</span>}
+                <span className="small muted">
+                  {[s.phone, s.product_count ? `${s.product_count} products` : null].filter(Boolean).join(' · ') || 'No products linked yet'}
+                </span>
               </div>
             </button>
           ))

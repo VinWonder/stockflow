@@ -1,12 +1,13 @@
 from django.contrib import admin
 
-from .models import (Category, Location, Product, Receipt, ReceiptLine, Sale, SaleLine, StockCount, StockLevel,
+from .models import (Category, Customer, Location, MpesaPayment, Product, Receipt, ReceiptLine, Sale, SaleLine, StockCount, StockLevel,
                      StockMovement, StockRequest, StockRequestLine, Supplier, Transfer, TransferLine, Variant)
 
 
 @admin.register(Location)
 class LocationAdmin(admin.ModelAdmin):
-    list_display = ["code", "name", "kind", "is_main", "can_sell", "is_active"]
+    list_display = ["code", "name", "business", "kind", "is_main", "can_sell", "is_active"]
+    list_filter = ["business", "kind"]
 
 
 admin.site.register(Category)
@@ -15,20 +16,20 @@ admin.site.register(Category)
 class VariantInline(admin.TabularInline):
     model = Variant
     extra = 1
-    fields = ["sku", "size", "colour", "barcode", "cost_price", "selling_price", "is_active"]
+    fields = ["sku", "size", "colour", "cost_price", "selling_price", "is_active"]
 
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = ["name", "code", "category", "brand", "unit", "is_active"]
-    list_filter = ["category", "unit", "is_active"]
+    list_display = ["name", "code", "business", "category", "brand", "unit", "is_active"]
+    list_filter = ["business", "unit", "is_active"]
     search_fields = ["name", "code", "variants__sku"]
     inlines = [VariantInline]
 
 
 @admin.register(Supplier)
 class SupplierAdmin(admin.ModelAdmin):
-    list_display = ["name", "contact_person", "phone", "is_active"]
+    list_display = ["name", "business", "contact_person", "phone", "is_active"]
     search_fields = ["name", "phone"]
 
 
@@ -83,3 +84,17 @@ _readonly_doc(Transfer, TransferLine, ["source", "destination"])
 _readonly_doc(StockRequest, StockRequestLine, ["kind", "location", "source"])
 _readonly_doc(Sale, SaleLine, ["location", "payment_method"])
 admin.site.register(StockCount)
+
+
+@admin.register(Customer)
+class CustomerAdmin(admin.ModelAdmin):
+    list_display = ["name", "phone", "business", "credit_limit", "is_active"]
+    search_fields = ["name", "phone"]
+
+
+@admin.register(MpesaPayment)
+class MpesaPaymentAdmin(admin.ModelAdmin):
+    list_display = ["created_at", "phone", "amount", "status", "receipt_number", "sale"]
+    list_filter = ["status"]
+    search_fields = ["phone", "receipt_number", "checkout_request_id"]
+    readonly_fields = [f.name for f in MpesaPayment._meta.fields]

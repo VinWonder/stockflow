@@ -1,17 +1,19 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  ArrowDownLeft, ArrowLeftRight, ChevronRight, ExternalLink, LogOut, MessageSquareText, Moon, PackageMinus, Server,
-  ShoppingCart, Truck, type LucideIcon,
+  ArrowDownLeft, ArrowLeftRight, Boxes, Building2, ChevronRight, HandCoins, LogOut, MessageSquareText, Moon, PackageMinus,
+  Server, ShoppingCart, Store, Truck, TriangleAlert, UserCog, Users, type LucideIcon,
 } from 'lucide-react';
 
 import { getBaseUrl } from '../lib/api';
 import { useAuth, useMe } from '../lib/auth';
-import { displayName, initials, roleLabel } from '../lib/models';
+import { displayName, initials, isManager, roleLabel } from '../lib/models';
 import { applyThemeMode, colors, getThemeMode, type ThemeMode } from '../lib/theme';
 import { Card, SectionTitle, TopBar } from '../ui/common';
 import { InstallBanner } from '../ui/install';
 import { useConfirm } from '../ui/overlay';
+
+type Item = { icon: LucideIcon; label: string; to: string; hint?: string; show?: boolean };
 
 export function MoreScreen() {
   const me = useMe();
@@ -20,47 +22,67 @@ export function MoreScreen() {
   const confirm = useConfirm();
   const [mode, setMode] = useState<ThemeMode>(getThemeMode);
 
-  const work: { icon: LucideIcon; label: string; to: string }[] = [
-    { icon: ArrowDownLeft, label: 'Receive supplier delivery', to: '/receive' },
-    { icon: ArrowLeftRight, label: 'New transfer', to: '/transfers/new' },
+  const work: Item[] = [
     { icon: ShoppingCart, label: 'Sell', to: '/sell' },
+    { icon: ArrowDownLeft, label: 'Receive supplier delivery', to: '/receive', show: isManager(me) },
+    { icon: ArrowLeftRight, label: 'Transfers & live tracking', to: '/transfers' },
     { icon: PackageMinus, label: 'Remove / add stock', to: '/requests/new' },
-    { icon: MessageSquareText, label: 'Send a command by WhatsApp / SMS', to: '/compose' },
+    { icon: TriangleAlert, label: 'Restock: low & out of stock', to: '/alerts?state=alert' },
+    { icon: HandCoins, label: 'Customers & credit', to: '/customers' },
     { icon: Truck, label: 'Suppliers', to: '/suppliers' },
+    { icon: MessageSquareText, label: 'Commands by WhatsApp / SMS', to: '/compose' },
+  ];
+  const manage: Item[] = [
+    { icon: Boxes, label: 'Products & prices', to: '/products', hint: 'Sizes, colours, buying and selling prices' },
+    { icon: Store, label: 'Shops & godowns', to: '/stores', hint: 'Add stores, map positions, who can sell' },
+    { icon: Users, label: 'Team', to: '/team', hint: 'Managers and shop staff, and their stores' },
+    { icon: Building2, label: 'Business details', to: '/settings' },
   ];
 
-  // The admin panel lives on the API server, next to /api.
-  const adminUrl = new URL(getBaseUrl().replace(/\/api\/?$/, '') + '/admin/', window.location.origin).toString();
+  const Group = ({ items }: { items: Item[] }) => (
+    <Card className="group">
+      {items.filter((w) => w.show !== false).map((w) => (
+        <button key={w.to} className="tile" onClick={() => navigate(w.to)}>
+          <w.icon size={22} color="var(--primary)" />
+          <div className="col grow">
+            <span style={{ fontWeight: 600 }}>{w.label}</span>
+            {w.hint && <span className="small muted">{w.hint}</span>}
+          </div>
+          <ChevronRight size={20} />
+        </button>
+      ))}
+    </Card>
+  );
 
   return (
     <main className="page">
       <TopBar title="More" />
-      <Card>
+      <Card onClick={() => navigate('/settings')}>
         <div className="row" style={{ gap: 14 }}>
           <span className="avatar" style={{ width: 56, height: 56, background: colors.steel, color: '#fff', fontSize: 18 }}>
             {initials(displayName(me))}
           </span>
           <div className="col grow">
             <span className="heavy" style={{ fontSize: 17 }}>{displayName(me)}</span>
-            <span>{roleLabel(me)}</span>
+            <span>{roleLabel(me)}{me.business ? ` · ${me.business.name}` : ''}</span>
             <span className="small" style={{ color: me.phone ? 'var(--muted)' : colors.danger }}>
-              {me.phone ? `+${me.phone}` : 'No phone registered for SMS/WhatsApp'}
+              {me.phone ? `+${me.phone}` : 'Add your phone to use SMS/WhatsApp commands'}
             </span>
           </div>
+          <UserCog size={22} />
         </div>
       </Card>
       <InstallBanner />
 
       <SectionTitle>Work</SectionTitle>
-      <Card className="group">
-        {work.map((w) => (
-          <button key={w.to} className="tile" onClick={() => navigate(w.to)}>
-            <w.icon size={22} color="var(--primary)" />
-            <span className="grow" style={{ fontWeight: 600 }}>{w.label}</span>
-            <ChevronRight size={20} />
-          </button>
-        ))}
-      </Card>
+      <Group items={work} />
+
+      {me.is_admin && (
+        <>
+          <SectionTitle>Manage your business</SectionTitle>
+          <Group items={manage} />
+        </>
+      )}
 
       <SectionTitle>App</SectionTitle>
       <Card className="group">
@@ -89,15 +111,6 @@ export function MoreScreen() {
             <span className="small muted">{getBaseUrl()}</span>
           </div>
         </div>
-        {me.is_admin && (
-          <a className="tile" href={adminUrl} target="_blank" rel="noreferrer">
-            <ExternalLink size={22} />
-            <div className="col grow">
-              <span>Admin panel</span>
-              <span className="small muted">Products, prices, stores and staff accounts</span>
-            </div>
-          </a>
-        )}
         <button
           className="tile"
           onClick={async () => {

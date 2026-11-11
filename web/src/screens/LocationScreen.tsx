@@ -1,30 +1,33 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  ArrowDownLeft, ArrowLeft, ArrowLeftRight, MapPin, MessageSquareText, Package, PackageMinus, PackagePlus, ScanLine,
-  Search, ShoppingCart, TriangleAlert, type LucideIcon,
+  ArrowDownLeft, ArrowLeft, ArrowLeftRight, MapPin, MessageSquareText, Package, PackageMinus, PackagePlus, PackageX,
+  Search, Settings, ShoppingCart, TriangleAlert, type LucideIcon,
 } from 'lucide-react';
 
 import { useMe } from '../lib/auth';
 import { moneyShort, qty, toD } from '../lib/format';
-import { canManage, type StockLevel } from '../lib/models';
+import { canManage, hasPoint, type StockLevel } from '../lib/models';
 import { useLocations, useStock } from '../lib/queries';
 import { alpha, colors, darken, fromHex } from '../lib/theme';
 import { Card, EmptyState, ErrorView, Pill, Progress, useBack } from '../ui/common';
-import { useScanner } from '../ui/Scanner';
+import { mapsLink } from '../ui/MapView';
+import { useStoreForm } from '../ui/StoreForm';
 import { Stat } from './LocationsScreen';
 
-/** One page per store: summary header, searchable stock list, and actions for this store. */
+type Filter = '' | 'low' | 'out';
+
+/** One page per store: summary header, searchable live stock list, and actions for this store. */
 export function LocationScreen({ locationId }: { locationId: number }) {
   const me = useMe();
   const navigate = useNavigate();
   const back = useBack();
-  const scan = useScanner();
+  const storeForm = useStoreForm();
   const loc = useLocations().data?.find((l) => l.id === locationId);
   const [search, setSearch] = useState('');
   const [term, setTerm] = useState('');
-  const [lowOnly, setLowOnly] = useState(false);
-  const stock = useStock(locationId, term, lowOnly);
+  const [filter, setFilter] = useState<Filter>('');
+  const stock = useStock(locationId, term, filter);
   const color = fromHex(loc?.color);
   const manage = canManage(me, locationId);
   const s = loc?.summary;
@@ -34,26 +37,18 @@ export function LocationScreen({ locationId }: { locationId: number }) {
     return () => window.clearTimeout(t);
   }, [search]);
 
-  const onScan = async () => {
-    const code = await scan();
-    if (code) {
-      setSearch(code);
-      setTerm(code);
-    }
-  };
-
   const go = (path: string) => () => navigate(path);
   const actions: { icon: LucideIcon; label: string; to: string; show?: boolean }[] = [
+    { icon: ShoppingCart, label: 'Sell', to: `/sell?location=${locationId}`, show: loc?.can_sell ?? false },
     { icon: ArrowDownLeft, label: 'Receive', to: `/receive?location=${locationId}`, show: manage },
     { icon: ArrowLeftRight, label: 'Transfer out', to: `/transfers/new?from=${locationId}` },
-    { icon: ShoppingCart, label: 'Sell', to: `/sell?location=${locationId}`, show: loc?.can_sell ?? false },
     { icon: PackageMinus, label: 'Remove', to: `/requests/new?location=${locationId}&kind=remove` },
     { icon: PackagePlus, label: 'Add', to: `/requests/new?location=${locationId}&kind=add` },
     { icon: MessageSquareText, label: 'By message', to: `/compose?location=${locationId}` },
   ];
 
   const rows = stock.data ?? [];
-  const filtering = term !== '' || lowOnly;
+  const filtering = term !== '' || filter !== '';
 
   return (
     <main className="page">
@@ -62,14 +57,27 @@ export function LocationScreen({ locationId }: { locationId: number }) {
           <button className="icon-btn" onClick={back} aria-label="Back">
             <ArrowLeft size={22} />
           </button>
-          <h1 className="grow ellipsis" style={{ margin: 0, fontSize: 22, fontWeight: 800 }}>{loc?.name ?? 'Store'}</h1>
+          <div className="col grow">
+            <h1 className="ellipsis" style={{ margin: 0, fontSize: 22, fontWeight: 800 }}>{loc?.name ?? 'Store'}</h1>
+            {loc?.address && <span className="tiny" style={{ opacity: 0.8 }}>{loc.address}</span>}
+          </div>
+          {loc && hasPoint(loc) && (
+            <a className="icon-btn" href={mapsLink({ lat: loc.latitude!, lng: loc.longitude! })} target="_blank" rel="noreferrer" aria-label="Open in Google Maps">
+              <MapPin size={22} />
+            </a>
+          )}
+          {me.is_admin && loc && (
+            <button className="icon-btn" aria-label="Store settings" onClick={() => storeForm(loc)}>
+              <Settings size={22} />
+            </button>
+          )}
         </div>
         {s && (
           <div className="row" style={{ marginTop: 24, padding: '0 4px' }}>
             <Stat label="Stock value" value={moneyShort(s.value)} wide />
             <Stat label="Items" value={`${s.items}`} />
-            <Stat label="Low" value={`${s.low}`} />
-            <Stat label="Out" value={`${s.out}`} />
+            <Stat label="Low" value={`${s.low}`} warn={s.low > 0} />
+            <Stat label="Out" value={`${s.out}`} warn={s.out > 0} />
           </div>
         )}
       </div>
@@ -83,17 +91,20 @@ export function LocationScreen({ locationId }: { locationId: number }) {
         ))}
       </div>
 
-      <div className="sticky-search row" style={{ gap: 8 }}>
-        <div className="input-wrap has-trail grow">
+      <div className="sticky-search" style={{ display: 'grid', gap: 8 }}>
+        <div className="input-wrap">
           <Search size={20} />
-          <input className="input" type="search" placeholder="Search this store" value={search} onChange={(e) => setSearch(e.target.value)} />
-          <button className="icon-btn trail" onClick={onScan} aria-label="Scan barcode">
-            <ScanLine size={20} />
+          <input className="input" type="search" placeholder="Search by name, size or colour" value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+        <div className="row" style={{ gap: 8 }}>
+          <button className={`choice${filter === '' ? ' on' : ''}`} onClick={() => setFilter('')}>All</button>
+          <button className={`choice${filter === 'low' ? ' on' : ''}`} onClick={() => setFilter('low')}>
+            <TriangleAlert size={16} /> Low {s ? `(${s.low})` : ''}
+          </button>
+          <button className={`choice${filter === 'out' ? ' on' : ''}`} onClick={() => setFilter('out')}>
+            <PackageX size={16} /> Out {s ? `(${s.out})` : ''}
           </button>
         </div>
-        <button className={`choice${lowOnly ? ' on' : ''}`} style={{ minHeight: 50 }} onClick={() => setLowOnly(!lowOnly)} aria-pressed={lowOnly}>
-          <TriangleAlert size={18} /> Low
-        </button>
       </div>
 
       {stock.isFetching && <Progress />}
@@ -102,9 +113,9 @@ export function LocationScreen({ locationId }: { locationId: number }) {
       ) : stock.isPending ? null : rows.length === 0 ? (
         <EmptyState
           icon={Package}
-          title={filtering ? 'Nothing matches' : 'No stock here yet'}
+          title={filtering ? 'Nothing here' : 'No stock here yet'}
           message={filtering ? undefined : 'Receive a supplier delivery or transfer goods in.'}
-          action={manage && !term ? 'Receive delivery' : undefined}
+          action={manage && !filtering ? 'Receive delivery' : undefined}
           onAction={go(`/receive?location=${locationId}`)}
         />
       ) : (
@@ -138,6 +149,7 @@ function StockTile({ level }: { level: StockLevel }) {
             {v.size && <Pill text={v.size} color={colors.steel} />}
             {v.colour && <Pill text={v.colour} color={colors.violet} />}
             {level.bin_location && <Pill text={level.bin_location} icon={MapPin} color={colors.slate} />}
+            {out ? <Pill text="Out" color={colors.danger} /> : level.is_low ? <Pill text="Low" color={colors.amber} /> : null}
           </div>
           <div className="bar" style={{ marginTop: 8, background: alpha(c, 0.12) }}>
             <div style={{ width: `${ratio * 100}%`, background: c }} />

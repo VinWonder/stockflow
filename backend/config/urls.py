@@ -4,9 +4,12 @@ from django.contrib import admin
 from django.http import FileResponse, HttpResponse
 from django.urls import include, path, re_path
 from django.views.decorators.cache import never_cache
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from rest_framework_simplejwt.views import TokenRefreshView
 
-admin.site.site_header = "StockFlow — Hardware Stock Control"
+from accounts.views import LoginView
+
+admin.site.site_header = "StockFlow"
+admin.site.site_title = "StockFlow"
 
 
 @never_cache
@@ -21,7 +24,7 @@ def web_app(request):
 
 urlpatterns = [
     path("admin/", admin.site.urls),
-    path("api/auth/token/", TokenObtainPairView.as_view(), name="token"),
+    path("api/auth/token/", LoginView.as_view(), name="token"),
     path("api/auth/refresh/", TokenRefreshView.as_view(), name="token-refresh"),
     path("api/", include("accounts.urls")),
     path("api/", include("inventory.urls")),

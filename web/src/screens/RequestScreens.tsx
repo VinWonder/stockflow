@@ -4,18 +4,21 @@ import { BadgeCheck, CircleCheck, ClipboardList, Info, MessageCircle, PackageMin
 
 import { api } from '../lib/api';
 import { useMe } from '../lib/auth';
-import { ago, numericInput, qty, qtyOut, toD, uuid } from '../lib/format';
-import { canManage, displayName, newLine, reasons, type Doc, type LineDraft, type Location } from '../lib/models';
+import { ago, money, numericInput, qty, qtyOut, toD, uuid } from '../lib/format';
+import { addReasons, canManage, displayName, newLine, reasons, removeReasons, type Doc, type LineDraft, type Location } from '../lib/models';
 import { useLocations, useRefreshEverything, useRequest, useRequests } from '../lib/queries';
 import { alpha, colors } from '../lib/theme';
-import { BottomActions, Card, EmptyState, ErrorView, Field, IconBox, LoadingList, Pill, SectionTitle, Segmented, StatusChip, Switch, TopBar } from '../ui/common';
+import { BottomActions, Card, EmptyState, ErrorView, Field, IconBox, LoadingList, Pill, SectionTitle, Segmented, Spinner, StatusChip, Switch, TopBar } from '../ui/common';
 import { LinesEditor, linesPayload } from '../ui/LinesEditor';
 import { useAskText, useConfirm, useOverlay } from '../ui/overlay';
 import { LocationField, usePickLocation, usePickVariant } from '../ui/pickers';
 
 type Kind = 'remove' | 'add';
 
-/** Ask for stock to be removed or added. Stock only changes after the admin approves. */
+/**
+ * Remove or add stock with a reason. The owner can apply it straight away; anyone else's request is checked:
+ * the stock manager confirms the goods were moved, then the owner approves, and only then does stock change.
+ */
 export function NewRequestScreen({ locationId, kind: initialKind }: { locationId: number | null; kind: Kind }) {
   const me = useMe();
   const navigate = useNavigate();
@@ -23,14 +26,15 @@ export function NewRequestScreen({ locationId, kind: initialKind }: { locationId
   const refresh = useRefreshEverything();
   const pickVariant = usePickVariant();
   const pickLocation = usePickLocation();
-  const mine = useLocations().data ?? [];
+  const mine = (useLocations().data ?? []).filter((l) => l.is_active !== false);
   const [clientUuid] = useState(uuid);
   const [kind, setKind] = useState<Kind>(initialKind);
-  const [reason, setReason] = useState(initialKind === 'remove' ? 'customer_pickup' : 'found');
+  const [reason, setReason] = useState(initialKind === 'remove' ? 'damaged' : 'found');
   const [location, setLocation] = useState<Location | null>(null);
   const [lines, setLines] = useState<LineDraft[]>([]);
   const [notes, setNotes] = useState('');
   const [alreadyDone, setAlreadyDone] = useState(false);
+  const [applyNow, setApplyNow] = useState(me.is_admin);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -39,15 +43,27 @@ export function NewRequestScreen({ locationId, kind: initialKind }: { locationId
   }, [mine, location, locationId]);
 
   const canDo = location != null && canManage(me, location.id);
+  const remove = kind === 'remove';
+  const sign = remove ? -1 : 1;
+  const value = lines.reduce((s, l) => s + l.quantity * toD(l.variant.cost_price), 0);
+  const over = remove ? lines.find((l) => l.available != null && l.quantity > l.available) : undefined;
 
   const add = async () => {
     if (!location) return;
-    const picked = await pickVariant({ locationId: location.id, inStockOnly: kind === 'remove' });
+    const picked = await pickVariant({ locationId: location.id, inStockOnly: remove });
     if (!picked || lines.some((l) => l.variant.id === picked.variant.id)) return;
     setLines([...lines, newLine(picked.variant, picked.available)]);
   };
 
   const submit = async () => {
+    if (over) {
+      overlay.error(`${over.variant.label}: only ${qty(over.available)} at ${location?.name}.`);
+      return;
+    }
+    if (reason === 'other' && !notes.trim()) {
+      overlay.error('Say what happened in the notes.');
+      return;
+    }
     setBusy(true);
     try {
       const r = await api.post<Doc>('/requests/', {
@@ -56,11 +72,16 @@ export function NewRequestScreen({ locationId, kind: initialKind }: { locationId
         location: location!.id,
         reason,
         notes: notes.trim(),
-        already_done: alreadyDone && canDo,
+        already_done: !me.is_admin && alreadyDone && canDo,
+        apply_now: me.is_admin && applyNow,
         lines: linesPayload(lines),
       });
       refresh();
-      overlay.success(r.status === 'confirmed' ? `${r.code} sent to the admin for approval` : `${r.code} sent to the stock manager`);
+      overlay.success(
+        r.status === 'approved' ? `${r.code}: stock updated at ${location!.name}`
+          : r.status === 'confirmed' ? `${r.code} sent to the owner for approval`
+            : `${r.code} sent to the ${location!.name} stock manager`,
+      );
       navigate(`/requests/${r.id}`, { replace: true });
     } catch (e) {
       overlay.error(e);
@@ -69,15 +90,21 @@ export function NewRequestScreen({ locationId, kind: initialKind }: { locationId
     }
   };
 
+  const reasonList = remove ? removeReasons : addReasons;
+  const flow = me.is_admin
+    ? applyNow ? 'Stock changes as soon as you save. It is recorded in the item history with your name and reason.' : 'The store manager confirms the goods were moved, then you approve.'
+    : alreadyDone && canDo ? 'Goes straight to the owner for approval. Stock changes once approved.'
+      : canDo ? 'You confirm when the goods are moved, then the owner approves.' : 'The store manager confirms, then the owner approves.';
+
   return (
     <main className="page with-actions">
-      <TopBar title={kind === 'remove' ? 'Remove stock' : 'Add stock'} back />
+      <TopBar title={remove ? 'Remove stock' : 'Add stock'} back />
       <div className="stack">
         <Segmented<Kind>
           value={kind}
           onChange={(k) => {
             setKind(k);
-            setReason(k === 'remove' ? 'customer_pickup' : 'found');
+            setReason(k === 'remove' ? 'damaged' : 'found');
             setLines([]);
           }}
           options={[
@@ -96,38 +123,67 @@ export function NewRequestScreen({ locationId, kind: initialKind }: { locationId
             }
           }}
         />
-        <Field label="Reason">
-          <select className="input" value={reason} onChange={(e) => setReason(e.target.value)}>
-            {Object.entries(reasons).map(([k, v]) => (
-              <option key={k} value={k}>{v}</option>
+        <Field label={remove ? 'Why are the goods leaving?' : 'Where did the extra goods come from?'}>
+          <div className="wrap">
+            {reasonList.map((k) => (
+              <button key={k} type="button" className={`choice${reason === k ? ' on' : ''}`} onClick={() => setReason(k)}>{reasons[k]}</button>
             ))}
-          </select>
+          </div>
         </Field>
       </div>
       <SectionTitle>Products</SectionTitle>
-      <LinesEditor lines={lines} onChange={setLines} onAdd={add} checkAvailable={kind === 'remove'} />
+      <LinesEditor lines={lines} onChange={setLines} onAdd={add} checkAvailable={remove} />
+
+      {lines.length > 0 && (
+        <Card style={{ marginTop: 12 }}>
+          <div className="bold" style={{ marginBottom: 6 }}>What will change at {location?.name}</div>
+          {lines.map((l) => {
+            const before = l.available ?? 0;
+            const after = before + sign * l.quantity;
+            return (
+              <div key={l.variant.id} className="row small" style={{ padding: '4px 0' }}>
+                <span className="grow ellipsis">{l.variant.label}</span>
+                <span className="muted">{qty(before)}</span>
+                <span style={{ color: remove ? colors.danger : colors.success, fontWeight: 800 }}>{remove ? '−' : '+'}{qty(l.quantity)}</span>
+                <span>→</span>
+                <span className="heavy" style={{ minWidth: 40, textAlign: 'right', color: after < 0 ? colors.danger : undefined }}>{qty(after)}</span>
+              </div>
+            );
+          })}
+          <div className="row small" style={{ marginTop: 8, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+            <span className="grow">Value at cost</span>
+            <span className="heavy" style={{ color: remove ? colors.danger : colors.success }}>{remove ? '−' : '+'}{money(value)}</span>
+          </div>
+        </Card>
+      )}
+
       <div className="stack" style={{ marginTop: 12 }}>
-        <Field label="Notes (customer, order no., details)">
+        <Field label={reason === 'other' ? 'What happened? (required)' : 'Notes (customer, order no., details)'}>
           <textarea className="input" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
         </Field>
-        {canDo && (
-          <Switch
-            checked={alreadyDone}
-            onChange={setAlreadyDone}
-            title={kind === 'remove' ? "I've already removed these goods" : "I've already added these goods"}
-            subtitle="Skips the manager step and goes straight to the admin for approval."
-          />
+        {me.is_admin ? (
+          <Switch checked={applyNow} onChange={setApplyNow} title="Apply now" subtitle="I've checked it myself. Skip the manager and approval steps." />
+        ) : (
+          canDo && (
+            <Switch
+              checked={alreadyDone}
+              onChange={setAlreadyDone}
+              title={remove ? "I've already removed these goods" : "I've already added these goods"}
+              subtitle="Skips the manager step and goes straight to the owner for approval."
+            />
+          )
         )}
         <Card style={{ background: alpha(colors.info, 0.08) }}>
           <div className="row">
             <Info size={22} color={colors.info} />
-            <span className="grow">Stock changes only after the admin approves, so a mistake here never changes the numbers on its own.</span>
+            <span className="grow small">{flow}</span>
           </div>
         </Card>
       </div>
       <BottomActions>
-        <button className="btn" disabled={busy || lines.length === 0 || !location} onClick={submit}>
-          <Send size={20} /> {alreadyDone && canDo ? 'Send for approval' : 'Send request'}
+        <button className={`btn${remove ? ' danger' : ' success'}`} disabled={busy || lines.length === 0 || !location || !!over} onClick={submit}>
+          {busy ? <Spinner /> : <Send size={20} />}{' '}
+          {me.is_admin && applyNow ? `${remove ? 'Remove' : 'Add'} ${lines.length} item(s) now` : alreadyDone && canDo ? 'Send for approval' : 'Send request'}
         </button>
       </BottomActions>
     </main>
@@ -237,6 +293,7 @@ function RequestBody({ d, confirming, actual, setActual }: {
         </div>
         <div className="heavy" style={{ fontSize: 17, marginTop: 12 }}>{d.location_name}</div>
         <div>Reason: {d.reason_label}</div>
+        {toD(d.value) > 0 && <div className="small muted">Value at cost: {money(d.value)}</div>}
         {d.notes && <div>{d.notes}</div>}
         {d.raw_message && <div className="whatsapp-bubble" style={{ marginTop: 10 }}>{d.raw_message}</div>}
         {d.rejection_reason && <div style={{ color: colors.danger, marginTop: 8 }}>Rejected: {d.rejection_reason}</div>}

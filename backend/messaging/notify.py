@@ -8,8 +8,8 @@ from .models import Notification
 User = get_user_model()
 
 
-def admins():
-    return User.objects.filter(Q(role="admin") | Q(is_superuser=True), is_active=True)
+def admins(business_id):
+    return User.objects.filter(Q(role="admin") | Q(is_superuser=True), business_id=business_id, is_active=True)
 
 
 def managers_of(location):
@@ -38,23 +38,30 @@ def transfer_changed(transfer_id, event):
 
     t = Transfer.objects.select_related("source", "destination", "created_by").get(pk=transfer_id)
     route = f"{t.source.name} → {t.destination.name}"
+    biz = t.source.business_id
+    driver = f" Driver: {t.driver_name} (+{t.driver_phone})" if t.driver_name and t.driver_phone else ""
+    vehicle = f", {t.get_vehicle_type_display()} {t.vehicle_reg}".rstrip() if t.vehicle_type else ""
     if event == "requested":
-        push(admins(), "transfer", f"Transfer {t.code} needs approval", f"{route}: {_lines(t)}", "transfer", t.pk, True)
+        push(admins(biz), "transfer", f"Transfer {t.code} needs approval", f"{route}: {_lines(t)}", "transfer", t.pk, True)
     elif event == "approved":
         push(list(managers_of(t.source)) + [t.created_by], "transfer", f"Transfer {t.code} approved",
              f"Dispatch from {t.source.name}: {_lines(t)}", "transfer", t.pk, True)
     elif event == "dispatched":
         push(list(managers_of(t.destination)) + list(User.objects.filter(locations=t.destination, is_active=True)),
-             "transfer", f"Incoming: {t.code} is on the way", f"{route}: {_lines(t)}. Count and receive it on arrival.",
-             "transfer", t.pk, True)
-        push(admins(), "transfer", f"{t.code} dispatched", route, "transfer", t.pk)
+             "transfer", f"Incoming: {t.code} is on the way",
+             f"{route}: {_lines(t)}.{driver}{vehicle}. Count and receive it on arrival.", "transfer", t.pk, True)
+        push(admins(biz), "transfer", f"{t.code} dispatched", f"{route}.{driver}{vehicle}", "transfer", t.pk)
+    elif event == "arriving":
+        people = list(User.objects.filter(locations=t.destination, is_active=True)) + list(admins(biz))
+        push(people, "transfer", f"{t.code} is arriving at {t.destination.name}",
+             f"The vehicle is less than 200 m away.{driver}{vehicle}. Get ready to count the goods.", "transfer", t.pk, True)
     elif event == "received":
         short = [l for l in t.lines.select_related("variant__product") if l.shortage]
         if short:
             detail = ", ".join(f"{l.variant.label} short by {l.shortage:g}" for l in short)
-            push(admins(), "transfer", f"⚠ {t.code} arrived short", f"{route}: {detail}", "transfer", t.pk, True)
+            push(admins(biz), "transfer", f"⚠ {t.code} arrived short", f"{route}: {detail}.{driver}", "transfer", t.pk, True)
         else:
-            push(admins(), "transfer", f"{t.code} received in full", route, "transfer", t.pk)
+            push(admins(biz), "transfer", f"{t.code} received in full", route, "transfer", t.pk)
         push(managers_of(t.source), "transfer", f"{t.code} received at {t.destination.name}", "", "transfer", t.pk)
     elif event == "rejected":
         push([t.created_by], "transfer", f"Transfer {t.code} rejected", t.rejection_reason or route, "transfer", t.pk)
@@ -70,9 +77,9 @@ def request_changed(request_id, status):
              f"{_lines(r)}. Reason: {r.get_reason_display()}. Confirm when done.", "request", r.pk, True,
              exclude=r.created_by)
         if not r.created_by or not r.created_by.is_admin:
-            push(admins(), "request", f"New request {r.code}", f"{verb} at {r.location.name}: {_lines(r)}", "request", r.pk)
+            push(admins(r.location.business_id), "request", f"New request {r.code}", f"{verb} at {r.location.name}: {_lines(r)}", "request", r.pk)
     elif status == "confirmed":
-        push(admins(), "request", f"Approve {r.code}: {verb.lower()}d at {r.location.name}",
+        push(admins(r.location.business_id), "request", f"Approve {r.code}: {verb.lower()}d at {r.location.name}",
              f"{_lines(r, 'confirmed_quantity')}. Reason: {r.get_reason_display()}.", "request", r.pk, True)
     elif status in ("approved", "rejected"):
         people = [r.created_by, r.confirmed_by]
@@ -84,7 +91,7 @@ def receipt_posted(receipt_id):
     from inventory.models import Receipt
 
     rc = Receipt.objects.select_related("location", "supplier", "created_by").get(pk=receipt_id)
-    push(admins(), "receipt", f"Delivery {rc.code} received at {rc.location.name}",
+    push(admins(rc.location.business_id), "receipt", f"Delivery {rc.code} received at {rc.location.name}",
          f"From {rc.supplier.name}: {_lines(rc)}", "receipt", rc.pk, exclude=rc.created_by)
 
 
@@ -93,7 +100,7 @@ def count_submitted(count_id):
 
     c = StockCount.objects.select_related("location").get(pk=count_id)
     diffs = sum(1 for l in c.lines.all() if l.variance)
-    push(admins(), "count", f"Stocktake {c.code} ready to post", f"{c.location.name}: {diffs} item(s) differ from the system.",
+    push(admins(c.location.business_id), "count", f"Stocktake {c.code} ready to post", f"{c.location.name}: {diffs} item(s) differ from the system.",
          "count", c.pk, True)
 
 
@@ -105,5 +112,6 @@ def low_stock_alert(level_ids):
         if Notification.objects.filter(kind="low_stock", ref_type="level", ref_id=lv.pk, is_read=False).exists():
             continue
         state = "OUT OF STOCK" if lv.quantity <= 0 else f"only {lv.quantity:g} {lv.variant.product.unit} left"
-        push(list(admins()) + list(managers_of(lv.location)), "low_stock", f"Low stock at {lv.location.name}",
+        title = f"Out of stock at {lv.location.name}" if lv.quantity <= 0 else f"Low stock at {lv.location.name}"
+        push(list(admins(lv.location.business_id)) + list(managers_of(lv.location)), "low_stock", title,
              f"{lv.variant.label}: {state}", "level", lv.pk, True)

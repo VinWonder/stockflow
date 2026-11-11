@@ -1,0 +1,246 @@
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
+import { HandCoins, MessageCircle, Pencil, Phone, Search, Users } from 'lucide-react';
+
+import { api } from '../lib/api';
+import { useMe } from '../lib/auth';
+import { dateOnly, money, numericInput, qty, toD } from '../lib/format';
+import type { Customer, Sale } from '../lib/models';
+import { useCustomers, useCustomerStatement, useRefreshEverything } from '../lib/queries';
+import { colors } from '../lib/theme';
+import { Card, EmptyState, ErrorView, Field, LoadingList, Pill, SectionTitle, Segmented, Spinner, TopBar } from '../ui/common';
+import { Dialog, useOverlay } from '../ui/overlay';
+
+/** Customers, with who owes money on credit and what is overdue. */
+export function CustomersScreen() {
+  const navigate = useNavigate();
+  const [owing, setOwing] = useState(true);
+  const [term, setTerm] = useState('');
+  const list = useCustomers(owing, term);
+  const rows = list.data ?? [];
+  const totalOwed = rows.reduce((s, c) => s + toD(c.owed), 0);
+  const totalOverdue = rows.reduce((s, c) => s + toD(c.overdue), 0);
+
+  return (
+    <main className="page">
+      <TopBar title="Customers & credit" back />
+      <Segmented<'owing' | 'all'>
+        value={owing ? 'owing' : 'all'}
+        onChange={(v) => setOwing(v === 'owing')}
+        options={[{ value: 'owing', label: 'Owing money' }, { value: 'all', label: 'All customers' }]}
+      />
+      <div className="input-wrap" style={{ marginTop: 10 }}>
+        <Search size={20} />
+        <input className="input" type="search" placeholder="Name or phone" value={term} onChange={(e) => setTerm(e.target.value)} />
+      </div>
+      {owing && rows.length > 0 && (
+        <div className="grid-2" style={{ marginTop: 12 }}>
+          <Card><div className="tiny muted">Total owed</div><div className="kpi-value" style={{ marginTop: 4 }}>{money(totalOwed)}</div></Card>
+          <Card><div className="tiny muted">Overdue</div><div className="kpi-value" style={{ marginTop: 4, color: totalOverdue > 0 ? colors.danger : undefined }}>{money(totalOverdue)}</div></Card>
+        </div>
+      )}
+      <div style={{ paddingTop: 12 }}>
+        {list.isPending ? (
+          <LoadingList />
+        ) : list.isError ? (
+          <ErrorView error={list.error} onRetry={() => list.refetch()} />
+        ) : rows.length === 0 ? (
+          <EmptyState icon={owing ? HandCoins : Users} title={owing ? 'Nobody owes you money' : 'No customers yet'} message={owing ? 'Credit sales appear here until they are paid.' : 'Customers are saved when you sell on credit or enter a phone number.'} />
+        ) : (
+          <div className="list">
+            {rows.map((c) => (
+              <Card key={c.id} onClick={() => navigate(`/customers/${c.id}`)}>
+                <div className="row">
+                  <span className="avatar">{c.name[0]?.toUpperCase()}</span>
+                  <div className="col grow">
+                    <span className="heavy">{c.name}</span>
+                    <span className="small muted">{c.phone ? `+${c.phone}` : 'No phone'}{toD(c.credit_limit) > 0 ? ` · limit ${money(c.credit_limit)}` : ''}</span>
+                  </div>
+                  <div className="col right">
+                    <span className="heavy" style={{ color: toD(c.owed) > 0 ? colors.amber : undefined }}>{money(c.owed)}</span>
+                    {toD(c.overdue) > 0 && <Pill text={`${money(c.overdue)} overdue`} color={colors.danger} />}
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
+    </main>
+  );
+}
+
+function PaymentDialog({ sale, close }: { sale: Sale; close: (v?: { amount: string; method: string; reference: string }) => void }) {
+  const [amount, setAmount] = useState(String(Math.round(toD(sale.balance))));
+  const [method, setMethod] = useState<'cash' | 'mpesa' | 'bank'>('cash');
+  const [reference, setReference] = useState('');
+  return (
+    <Dialog
+      onClose={() => close()}
+      title={`Payment for ${sale.code}`}
+      actions={
+        <>
+          <button className="btn text" onClick={() => close()}>Cancel</button>
+          <button className="btn small" onClick={() => close({ amount, method, reference })}>Record</button>
+        </>
+      }
+    >
+      <div className="stack">
+        <p className="small" style={{ margin: 0 }}>Still owed: <b>{money(sale.balance)}</b></p>
+        <Field label="Amount received">
+          <input className="input" autoFocus inputMode="decimal" value={amount} onFocus={(e) => e.target.select()} onChange={(e) => setAmount(numericInput(e.target.value))} />
+        </Field>
+        <Segmented<'cash' | 'mpesa' | 'bank'>
+          value={method}
+          onChange={setMethod}
+          options={[{ value: 'cash', label: 'Cash' }, { value: 'mpesa', label: 'M-Pesa' }, { value: 'bank', label: 'Bank' }]}
+        />
+        {method !== 'cash' && (
+          <Field label={method === 'mpesa' ? 'M-Pesa code' : 'Reference'}>
+            <input className="input" autoCapitalize="characters" value={reference} onChange={(e) => setReference(e.target.value.toUpperCase())} />
+          </Field>
+        )}
+      </div>
+    </Dialog>
+  );
+}
+
+function LimitDialog({ customer, close }: { customer: Customer; close: (v?: string) => void }) {
+  const [limit, setLimit] = useState(String(Math.round(toD(customer.credit_limit))));
+  return (
+    <Dialog
+      onClose={() => close()}
+      title="Credit limit"
+      actions={
+        <>
+          <button className="btn text" onClick={() => close()}>Cancel</button>
+          <button className="btn small" onClick={() => close(limit)}>Save</button>
+        </>
+      }
+    >
+      <p className="small" style={{ marginTop: 0 }}>The most {customer.name} may owe at any time. 0 means no limit.</p>
+      <input className="input" autoFocus inputMode="decimal" value={limit} onChange={(e) => setLimit(numericInput(e.target.value))} />
+    </Dialog>
+  );
+}
+
+export function CustomerScreen({ id }: { id: number }) {
+  const me = useMe();
+  const overlay = useOverlay();
+  const qc = useQueryClient();
+  const refresh = useRefreshEverything();
+  const data = useCustomerStatement(id);
+  const [busy, setBusy] = useState(false);
+
+  const pay = async (sale: Sale) => {
+    const v = await overlay.open<{ amount: string; method: string; reference: string }>((close) => <PaymentDialog sale={sale} close={close} />);
+    if (!v) return;
+    setBusy(true);
+    try {
+      await api.post(`/sales/${sale.id}/pay/`, v);
+      refresh();
+      overlay.success(`${money(v.amount)} recorded`);
+    } catch (e) {
+      overlay.error(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const editLimit = async (c: Customer) => {
+    const v = await overlay.open<string>((close) => <LimitDialog customer={c} close={close} />);
+    if (v == null) return;
+    try {
+      await api.patch(`/customers/${c.id}/`, { credit_limit: toD(v).toFixed(2) });
+      qc.invalidateQueries({ queryKey: ['customer', id] });
+      qc.invalidateQueries({ queryKey: ['customers'] });
+    } catch (e) {
+      overlay.error(e);
+    }
+  };
+
+  if (data.isPending) return <main className="page"><TopBar title="Customer" back /><LoadingList /></main>;
+  if (data.isError) return <main className="page"><TopBar title="Customer" back /><ErrorView error={data.error} onRetry={() => data.refetch()} /></main>;
+  const { customer: c, sales } = data.data;
+  const open = sales.filter((s) => s.status === 'completed' && toD(s.balance) > 0);
+  const closed = sales.filter((s) => !open.includes(s));
+  const today = new Date().toISOString().slice(0, 10);
+
+  return (
+    <main className="page">
+      <TopBar title={c.name} back />
+      <Card>
+        <div className="row">
+          <div className="col grow">
+            <span className="small muted">Owes</span>
+            <span style={{ fontSize: 28, fontWeight: 800, color: toD(c.owed) > 0 ? colors.amber : colors.success }}>{money(c.owed)}</span>
+            {toD(c.overdue) > 0 && <span className="small bold" style={{ color: colors.danger }}>{money(c.overdue)} overdue</span>}
+          </div>
+          {c.phone && (
+            <>
+              <a className="icon-btn tonal" href={`tel:+${c.phone}`} aria-label="Call"><Phone size={20} /></a>
+              <a
+                className="icon-btn tonal"
+                target="_blank"
+                rel="noreferrer"
+                aria-label="WhatsApp reminder"
+                href={`https://wa.me/${c.phone}?text=${encodeURIComponent(`Hello ${c.name}, a friendly reminder: your balance with ${me.business?.name ?? 'us'} is ${money(c.owed)}. Thank you.`)}`}
+              >
+                <MessageCircle size={20} />
+              </a>
+            </>
+          )}
+        </div>
+        <div className="row small" style={{ marginTop: 10 }}>
+          <span className="grow">Credit limit: <b>{toD(c.credit_limit) > 0 ? money(c.credit_limit) : 'none'}</b></span>
+          {me.is_admin && <button className="btn text" onClick={() => editLimit(c)}><Pencil size={16} /> Change</button>}
+        </div>
+      </Card>
+
+      <SectionTitle>Unpaid ({open.length})</SectionTitle>
+      <div className="list">
+        {open.length === 0 && <p className="muted small">Nothing unpaid.</p>}
+        {open.map((s) => (
+          <SaleCard key={s.id} s={s} overdue={!!s.due_date && s.due_date < today} onPay={() => pay(s)} busy={busy} />
+        ))}
+      </div>
+      {closed.length > 0 && (
+        <>
+          <SectionTitle>History</SectionTitle>
+          <div className="list">
+            {closed.map((s) => (
+              <SaleCard key={s.id} s={s} />
+            ))}
+          </div>
+        </>
+      )}
+    </main>
+  );
+}
+
+function SaleCard({ s, overdue, onPay, busy }: { s: Sale; overdue?: boolean; onPay?: () => void; busy?: boolean }) {
+  return (
+    <Card>
+      <div className="row">
+        <span className="heavy grow">{s.code}</span>
+        {s.status === 'void' ? <Pill text="Voided" color={colors.slate} /> : overdue ? <Pill text={`Due ${dateOnly(s.due_date)}`} color={colors.danger} /> : s.due_date && toD(s.balance) > 0 ? <Pill text={`Due ${dateOnly(s.due_date)}`} color={colors.amber} /> : null}
+      </div>
+      <div className="small muted">{dateOnly(s.created_at)} · {s.location_name} · {s.lines.map((l) => `${l.variant_label} ×${qty(l.quantity)}`).join(', ')}</div>
+      <div className="row" style={{ marginTop: 8 }}>
+        <span className="grow small">Total {money(s.total)} · paid {money(s.amount_paid)}</span>
+        {toD(s.balance) > 0 && <span className="heavy" style={{ color: colors.amber }}>{money(s.balance)}</span>}
+      </div>
+      {s.payments.length > 1 && (
+        <div className="tiny muted" style={{ marginTop: 6 }}>
+          {s.payments.map((p) => `${dateOnly(p.created_at)} ${p.method_label} ${money(p.amount)}${p.reference ? ` (${p.reference})` : ''}`).join(' · ')}
+        </div>
+      )}
+      {onPay && (
+        <button className="btn tonal small block" style={{ marginTop: 10 }} disabled={busy} onClick={onPay}>
+          {busy ? <Spinner /> : <HandCoins size={18} />} Record payment
+        </button>
+      )}
+    </Card>
+  );
+}

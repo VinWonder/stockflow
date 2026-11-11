@@ -1,4 +1,4 @@
-# StockFlow — Hardware Stock Control
+# StockFlow
 
 Track every item in your **home godown** and **shops**: deliveries from suppliers (with date, sizes, colours, quantities and amounts),
 transfers between stores with arrival checks, sales at the main shop, removals and additions approved by the admin, stocktakes,
@@ -11,6 +11,25 @@ stockflow/
 ```
 
 ---
+
+## Accounts: every client is a business
+
+Nobody needs the Django admin any more. A new client opens the app and taps **Create account**:
+
+1. **You**: business name, owner's name, email (for password resets), phone, password.
+2. **Main shop**: the head office (name, address, optional map pin).
+3. **Other stores**: any number of shops and godowns.
+
+That creates a **business** with its main shop and stores, and signs the owner in as its admin. Each business only
+ever sees its own stores, products, suppliers, customers and staff, so many clients can share one server.
+Store codes and product codes only need to be unique inside one business.
+
+From the app the owner then adds **products & prices** (sizes, colours, buying and selling price), **team** members
+(managers and shop staff, and the stores each works in), more **stores** (with map positions), and business details.
+Users sign in with their username **or** email. **Forgot password?** emails a 6-digit code (valid 15 minutes, 5 tries)
+from the Gmail account in `EMAIL_HOST_USER`; see [Email](#email-forgot-password-codes-gmail) below.
+
+Hardware has no barcodes, so products are always found by **name, size and colour** (the camera scanner was removed).
 
 ## How it works (read this first)
 
@@ -73,8 +92,27 @@ PENDING ──manager removes goods & confirms──▶ CONFIRMED ──admin ap
 - **Manager already removed something:** texts `REMOVED GDN: PNT 4L WHITE 2 #damaged`. It goes straight to *confirmed* and waits for the admin.
 - Stock only changes at **approval**, so a typo in a message can never move stock on its own.
 
-**Main shop sales:** sales are recorded per shop, deduct stock immediately, store the buying cost at the time of sale (for real profit),
-and can be voided by a manager the same day or by the admin any time. Godowns can't sell: goods must be transferred to a shop first.
+**Sales:** recorded at any store where selling is switched on (shops by default; the owner can switch it on for a godown,
+right from the Sell screen). Stock for the cart is re-checked live every few seconds, sales deduct stock immediately and keep
+the buying cost at the time of sale (for real profit), and can be voided by a manager the same day or by the admin any time.
+Payment:
+- **Cash**: type the cash received and the app shows the change.
+- **M-Pesa**: either **send a prompt** to the customer's phone (STK push; the sale completes itself when they enter their PIN)
+  or **enter the 10-character code** from their message. Each code / payment can be used on one sale only.
+- **Credit**: needs the customer's name and phone; optional cash deposit and a pay-by date (default 14 days). If the customer
+  has a credit limit, a sale that would push them over it is refused. **Customers & credit** lists who owes what and what is
+  overdue, and records payments (cash, M-Pesa code or bank) against each sale.
+
+**Dashboard:** choose *All stores* or one shop/godown and every figure follows: stock value (at cost and at selling price),
+today's sales vs yesterday at the same time, profit and margin (owner only), average sale, units sold, money collected by
+method, credit given and owed, best sellers, and live **running low / out of stock** counts that open a restock list
+(refreshed every 10 seconds, with a one-tap transfer from the store that has the most).
+
+**Transfers with driver and live tracking:** every transfer records **who carries the goods** (name, phone) and **how**
+(tuk-tuk, motorbike, pick-up, lorry, handcart, on foot) with the **number plate** for motor vehicles; dispatch is refused
+without them. On dispatch the driver gets an SMS link to a page (no login) that shares the phone's GPS while open. The transfer
+page shows the goods moving on Google Maps with distance left and arrival time; the receiving store is alerted when the vehicle
+is within 200 m. Set each store's map pin (Stores → ⚙ → *I'm at this store*) so distance and arrival work.
 
 **Stocktake:** the manager starts a count (the system snapshots expected quantities), enters what's on the shelves, and submits.
 The admin sees every difference and posts; each difference becomes a visible `count` movement.
@@ -159,7 +197,8 @@ python manage.py runserver 0.0.0.0:8000
 (or **F5 → "Backend: runserver"**). `0.0.0.0` lets your phone on the same Wi-Fi reach it at `http://<your-PC-IP>:8000`;
 add that IP to `ALLOWED_HOSTS` in `.env`.
 
-- **Admin panel:** http://127.0.0.1:8000/admin/ (stores, products, users and phone numbers; documents are read-only there so every change follows the rules)
+- **Create your account:** open the app and tap *Create account* (or use the demo logins above).
+- **Back-office (operator only):** http://127.0.0.1:8000/admin/ lists every business. Clients never need it.
 - **API:** open `backend/api.http` and click *Send Request* on each block (REST Client extension) to log in, receive goods, transfer, and simulate SMS commands.
 
 ### 1.6 Try the SMS commands for free
@@ -176,16 +215,19 @@ APPROVE SR00001       (log in as admin)   → stock reduced by 2
 
 | Area | Endpoints |
 |---|---|
-| Auth | `POST /api/auth/token/`, `POST /api/auth/refresh/`, `GET/PATCH /api/auth/me/` |
-| Dashboard | `GET /api/dashboard/?location=` (stock value, today's sales & profit, actions waiting, 14-day in/out, top movers, low stock, recent activity) |
+| Auth | `POST /api/auth/register/`, `POST /api/auth/token/` (username or email), `POST /api/auth/refresh/`, `GET/PATCH /api/auth/me/`, `POST /api/auth/password/forgot/` · `verify/` · `reset/` · `change/` |
+| Business & team | `GET/PATCH /api/business/`, `/api/users/` (owner only) |
+| App config | `GET /api/config/` (maps key, M-Pesa mode, vehicle types) |
+| Dashboard | `GET /api/dashboard/?location=` (stock value, today's sales vs yesterday, profit & margin, money collected, credit, best sellers, low/out items, 14-day in/out), `GET /api/stock-alerts/?location=` (live low/out counts) |
 | Stores | `/api/locations/` (each with items, units, value, low, out) |
-| Catalogue | `/api/categories/`, `/api/products/` (create with `variants: [{size, colour, selling_price}]`), `/api/variants/`, `/api/variants/barcode/<code>/` |
-| Suppliers | `/api/suppliers/` (with total supplied and number of deliveries) |
-| Stock | `/api/stock/?location=&search=&low=1&in_stock=1`, `/api/movements/?location=&variant=` |
+| Catalogue | `/api/categories/`, `/api/products/` (create with `new_variants: [{size, colour, selling_price, cost_price}]`), `/api/variants/?supplier=` |
+| Suppliers | `/api/suppliers/` (total supplied, deliveries, products, what you owe), `/api/suppliers/<id>/products/` |
+| Customers | `/api/customers/?owing=1`, `/api/customers/<id>/statement/` |
+| Stock | `/api/stock/?location=&search=&state=low|out|alert&in_stock=1`, `/api/movements/?location=&variant=` |
 | Deliveries | `/api/receipts/` · `post/` · `void/` · `payment/` |
-| Transfers | `/api/transfers/` · `approve/` · `reject/` · `cancel/` · `dispatch/` · `receive/` |
+| Transfers | `/api/transfers/?status_in=` · `approve/` · `reject/` · `cancel/` · `dispatch/` (driver & vehicle) · `driver/` · `track/` · `receive/`; driver page `GET/POST /api/track/<token>/` (no login) |
 | Requests | `/api/requests/` · `confirm/` · `approve/` · `reject/` · `cancel/` |
-| Sales | `/api/sales/` · `void/` |
+| Sales | `/api/sales/` (`deposit`, `due_date`, `mpesa_payment`) · `void/` · `pay/`; M-Pesa prompts `POST /api/mpesa/stk/`, `GET /api/mpesa/stk/<id>/`, callback `POST /api/mpesa/callback/?token=` |
 | Stocktake | `/api/counts/` · `record/` · `submit/` · `post/` |
 | Notifications | `/api/notifications/` · `unread/` · `<id>/read/` · `read_all/` |
 | Messaging | `/api/messaging/config/`, `/api/messaging/simulate/`, `/api/messaging/log/` |
@@ -209,6 +251,32 @@ For your own business number later, apply for the WhatsApp Business API through 
 Webhooks need a public HTTPS address: use `ngrok http 8000` while developing. Give each user their phone number in the admin
 (any format; it's stored as 2547XXXXXXXX) and tick *SMS alerts* / *WhatsApp alerts* if they want notifications on their phone too.
 
+## Email (forgot-password codes): Gmail
+
+1. Sign in to **vinwonder05@gmail.com** → Google Account → **Security** → turn on **2-Step Verification**.
+2. Security → **App passwords** → create one named "StockFlow" → copy the 16-character password.
+3. In `.env` (or Render → Environment) set `EMAIL_HOST_PASSWORD` to it. `EMAIL_HOST_USER` and `DEFAULT_FROM_EMAIL`
+   already point at vinwonder05@gmail.com.
+
+Until the password is set, the email (with the code) is printed in the server terminal, which is handy for testing.
+
+## M-Pesa prompts (Daraja)
+
+Out of the box `MPESA_BACKEND=console`: prompts are marked paid at once with a fake receipt (SIM…), so you can try the flow.
+Typing M-Pesa codes works in every mode. For real prompts:
+
+1. Create an app on https://developer.safaricom.co.ke (sandbox first: shortcode 174379 and the sandbox passkey).
+2. Set `MPESA_BACKEND=daraja`, `MPESA_ENV=sandbox` (later `production`), `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`,
+   `MPESA_SHORTCODE`, `MPESA_PASSKEY`. For a till number use `MPESA_TRANSACTION_TYPE=CustomerBuyGoodsOnline` and `MPESA_PARTY_B=<till>`.
+3. Safaricom must reach `https://<your-domain>/api/mpesa/callback/?token=<MPESA_CALLBACK_TOKEN>` (public HTTPS). If the callback
+   can't arrive, the app also asks Safaricom for the result while the till is waiting.
+
+## Google Maps (live tracking)
+
+Create a **Maps JavaScript API** key in Google Cloud, restrict it to your domain, and set `GOOGLE_MAPS_API_KEY`.
+Without a key the app shows OpenStreetMap and "Open in Google Maps" links instead, so tracking still works.
+Set `PUBLIC_APP_URL` (e.g. `https://stockflow.onrender.com`) so the driver's SMS link points at the right address.
+
 ## Deploying free: Render (app) + Neon (database)
 
 1. **Database (Neon):** sign up at https://neon.com → create a project (region: AWS Europe, Frankfurt) → copy the
@@ -217,7 +285,10 @@ Webhooks need a public HTTPS address: use `ngrok http 8000` while developing. Gi
 3. **App (Render):** sign up at https://render.com with GitHub → **New → Blueprint** → pick the repository.
    Render reads `render.yaml` and asks for:
    - `DATABASE_URL`: the Neon connection string
-   - `ADMIN_USERNAME` / `ADMIN_PASSWORD`: your first admin login (created on first start, then left alone)
+   - `EMAIL_HOST_PASSWORD`: the Gmail App Password (forgot-password emails)
+   - `GOOGLE_MAPS_API_KEY`: optional, for Google Maps tracking
+
+   Clients then create their own accounts in the app. (Optional: set `ADMIN_USERNAME` / `ADMIN_PASSWORD` to get an operator login for `/admin/`.)
 4. Wait for the build (~5 minutes), then open `https://<name>.onrender.com` on your phone and install it.
 
 On every start the server updates the database tables and checks the admin account, so there's nothing to run by hand.
@@ -228,11 +299,10 @@ a minute to wake; uploaded product images are not kept between deploys (stock da
 ```bash
 docker compose up -d --build
 docker compose exec api python manage.py migrate
-docker compose exec api python manage.py createsuperuser
 ```
 The image builds the web app too, so `https://your-domain/` is the app and `https://your-domain/api/` the API.
 Put Nginx + Certbot in front for HTTPS (same as the PGCS guide); HTTPS is required for installing the app and for the
-barcode camera. Set `DEBUG=False`, a new `SECRET_KEY`, your domain in `ALLOWED_HOSTS`, and schedule a daily `pg_dump` backup.
+GPS tracking page. Set `DEBUG=False`, a new `SECRET_KEY`, your domain in `ALLOWED_HOSTS`, and schedule a daily `pg_dump` backup.
 
 ---
 
@@ -243,7 +313,7 @@ on Android, iPhone, Windows and Mac: home-screen icon, full screen, no browser b
 connection (data still needs the server).
 
 Screens: sign in, dashboard (stock value, today's sales and profit, "needs your attention", 14-day in/out chart, low
-stock, fastest movers, latest activity), stores and store pages with search, barcode scanning and item history,
+stock, fastest movers, latest activity), stores and store pages with search by name/size/colour and item history,
 receive delivery, transfers with the status timeline (approve → dispatch → count on arrival), remove/add requests and
 approvals, point of sale (cash / M-Pesa / credit), the SMS/WhatsApp message composer, suppliers, inbox with alerts,
 and light/dark themes. Phone screens get a bottom bar; wide screens get a side rail.
@@ -266,7 +336,7 @@ npm run build          # creates web/dist
 Django now serves the app at http://127.0.0.1:8000/ alongside `/api/` and `/admin/`. The Docker image does this for you.
 
 ### Install it as an app
-The app must be opened over **HTTPS** (or `localhost`) for browsers to offer installing it and to allow the camera.
+The app must be opened over **HTTPS** (or `localhost`) for browsers to offer installing it and to share GPS location (driver tracking, store map pins).
 - **Android (Chrome):** open the site → *Install StockFlow* on the sign-in or More screen (or ⋮ → *Install app*).
 - **iPhone / iPad (Safari):** Share → *Add to Home Screen*.
 - **Windows / Mac (Chrome or Edge):** the install icon in the address bar.

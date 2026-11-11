@@ -1,5 +1,6 @@
 # Render Blueprint: Render → New → Blueprint → pick this repository.
 # The database lives on Neon (free, doesn't expire); paste its connection string as DATABASE_URL when asked.
+# Clients open their own accounts in the app ("Create account"), so no admin login is needed here.
 services:
   - type: web
     name: stockflow
@@ -12,13 +13,11 @@ services:
     envVars:
       - key: DATABASE_URL
         sync: false
-      - key: ADMIN_USERNAME
-        sync: false
-      - key: ADMIN_PASSWORD
-        sync: false
       - key: SECRET_KEY
         generateValue: true
       - key: INBOUND_TOKEN
+        generateValue: true
+      - key: MPESA_CALLBACK_TOKEN
         generateValue: true
       - key: DEBUG
         value: "False"
@@ -34,3 +33,15 @@ services:
         value: console
       - key: WHATSAPP_BACKEND
         value: console
+      # Forgot-password emails (Gmail App Password goes in EMAIL_HOST_PASSWORD; set it in the Render dashboard)
+      - key: EMAIL_HOST_USER
+        value: vinwonder05@gmail.com
+      - key: DEFAULT_FROM_EMAIL
+        value: StockFlow <vinwonder05@gmail.com>
+      - key: EMAIL_HOST_PASSWORD
+        sync: false
+      # M-Pesa: console = test mode until you add Daraja keys (MPESA_BACKEND=daraja, MPESA_CONSUMER_KEY, …)
+      - key: MPESA_BACKEND
+        value: console
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false

@@ -6,15 +6,19 @@ Every public function runs in ONE database transaction and locks the affected St
 (SELECT … FOR UPDATE) in a fixed order, so two phones selling the last bag of cement at the
 same moment can never drive stock negative or deadlock each other.
 """
+import math
+import re
+import secrets
 from collections import defaultdict
+from datetime import timedelta
 from decimal import Decimal
 
 from django.db import transaction
 from django.utils import timezone
 
 from .exceptions import InsufficientStock, StockError
-from .models import (ZERO, Location, Receipt, Sale, StockCount, StockCountLine, StockLevel, StockMovement,
-                     StockRequest, Transfer, Variant)
+from .models import (MOTOR_VEHICLES, ZERO, Location, MpesaPayment, Receipt, Sale, SalePayment, StockCount,
+                     StockCountLine, StockLevel, StockMovement, StockRequest, TrackPoint, Transfer, Variant, Vehicle)
 
 K = StockMovement.Kind
 
@@ -86,6 +90,7 @@ def post_receipt(receipt: Receipt, user):
         _update_average_cost(line.variant, line.quantity, line.unit_cost)
         _apply(levels[(receipt.location_id, line.variant_id)], line.quantity, K.RECEIPT, receipt.code, user,
                line.unit_cost, f"From {receipt.supplier.name}")
+        line.variant.product.suppliers.add(receipt.supplier)  # next delivery lists this supplier's products first
     receipt.status = Receipt.Status.POSTED
     receipt.posted_at = timezone.now()
     receipt.save(update_fields=["status", "posted_at", "updated_at"])
@@ -125,8 +130,11 @@ def void_receipt(receipt: Receipt, user, reason=""):
 def create_transfer_status(transfer: Transfer, user):
     """Admins' transfers are approved immediately; managers' need the admin."""
     _require(transfer.source_id != transfer.destination_id, "Choose two different locations.")
+    _require(transfer.source.business_id == transfer.destination.business_id == user.business_id,
+             "Both stores must belong to your business.")
     _require(user.can_access(transfer.source) or user.can_access(transfer.destination),
              "You can only request transfers for your own stores.")
+    set_driver(transfer, {})
     if user.is_admin:
         transfer.status = Transfer.Status.APPROVED
         transfer.approved_by = user
@@ -169,12 +177,39 @@ def cancel_transfer(transfer: Transfer, user):
     return transfer
 
 
+def set_driver(transfer: Transfer, driver: dict | None):
+    """Copy driver / vehicle details onto the transfer (blank values keep what was entered before)."""
+    from accounts.models import normalize_phone
+
+    for field in ("driver_name", "driver_phone", "vehicle_type", "vehicle_reg"):
+        value = (driver or {}).get(field)
+        if value not in (None, ""):
+            setattr(transfer, field, str(value).strip())
+    transfer.driver_phone = normalize_phone(transfer.driver_phone) if transfer.driver_phone else ""
+    transfer.vehicle_reg = re.sub(r"\s+", " ", (transfer.vehicle_reg or "").upper()).strip()
+
+
+def _check_driver(transfer: Transfer):
+    _require(transfer.driver_name.strip(), "Enter the name of the person taking the goods.", "driver_required")
+    _require(len(transfer.driver_phone) >= 12, "Enter the driver's phone number (e.g. 0712 345 678).", "driver_required")
+    _require(transfer.vehicle_type in Vehicle.values, "Choose how the goods are travelling (tuk-tuk, motorbike …).", "driver_required")
+    if transfer.vehicle_type in MOTOR_VEHICLES:
+        _require(len(transfer.vehicle_reg.replace(" ", "")) >= 5,
+                 f"Enter the {transfer.get_vehicle_type_display().lower()}'s number plate (e.g. KMEA 123B).", "driver_required")
+
+
 @transaction.atomic
-def dispatch_transfer(transfer: Transfer, user):
-    """Goods physically leave the source: stock goes down there and is 'in transit'."""
+def dispatch_transfer(transfer: Transfer, user, driver: dict | None = None):
+    """Goods physically leave the source: stock goes down there and is 'on the way'.
+
+    The driver's name and phone and the vehicle (tuk-tuk / motorbike number plate) are required here,
+    so every load on the road can be traced to a person and a vehicle.
+    """
     transfer = Transfer.objects.select_for_update().get(pk=transfer.pk)
     _require(transfer.status == Transfer.Status.APPROVED, "Only approved transfers can be dispatched.")
     _require(user.can_manage(transfer.source), f"Only the {transfer.source.name} manager or an admin can dispatch.")
+    set_driver(transfer, driver)
+    _check_driver(transfer)
     lines = list(transfer.lines.select_related("variant__product"))
     _check_qty(lines)
     levels = _lock_levels([(transfer.source_id, l.variant_id) for l in lines])
@@ -183,6 +218,7 @@ def dispatch_transfer(transfer: Transfer, user):
                line.variant.cost_price, f"To {transfer.destination.name}")
     transfer.status = Transfer.Status.IN_TRANSIT
     transfer.dispatched_by, transfer.dispatched_at = user, timezone.now()
+    transfer.tracking_token = transfer.tracking_token or secrets.token_urlsafe(16)
     transfer.save()
     _after_commit_low_stock(levels.values())
     _notify("transfer_changed", transfer.pk, "dispatched")
@@ -215,6 +251,74 @@ def receive_transfer(transfer: Transfer, user, received: dict | None = None):
     transfer.save()
     _notify("transfer_changed", transfer.pk, "received")
     return transfer
+
+
+# ----------------------------------------------------------------------------- live tracking
+ARRIVAL_RADIUS_M = 200
+
+
+def distance_m(lat1, lng1, lat2, lng2):
+    """Great-circle distance in metres."""
+    lat1, lng1, lat2, lng2 = (math.radians(float(x)) for x in (lat1, lng1, lat2, lng2))
+    a = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lng2 - lng1) / 2) ** 2
+    return 6371000 * 2 * math.asin(math.sqrt(a))
+
+
+@transaction.atomic
+def record_track_point(transfer: Transfer, lat, lng, accuracy=None, speed=None, heading=None):
+    """A GPS fix from the phone travelling with the goods. Only accepted while they are on the road."""
+    transfer = Transfer.objects.select_for_update().select_related("destination").get(pk=transfer.pk)
+    _require(transfer.status == Transfer.Status.IN_TRANSIT, "Tracking has ended: these goods are no longer on the way.",
+             "tracking_closed")
+    try:
+        lat = Decimal(str(lat)).quantize(Decimal("0.000001"))
+        lng = Decimal(str(lng)).quantize(Decimal("0.000001"))
+    except Exception:
+        raise StockError("Invalid GPS position.", "bad_position")
+    _require(-90 <= lat <= 90 and -180 <= lng <= 180, "Invalid GPS position.", "bad_position")
+    now = timezone.now()
+    last = transfer.track_points.order_by("-recorded_at").first()
+    if last and (now - last.recorded_at) < timedelta(seconds=3):
+        return last  # phones can fire several fixes a second; keep the log small
+    point = TrackPoint.objects.create(transfer=transfer, latitude=lat, longitude=lng, accuracy=accuracy, speed=speed,
+                                      heading=heading, recorded_at=now)
+    dest = transfer.destination
+    if not transfer.arrived_near_at and dest.has_map_point:
+        if distance_m(lat, lng, dest.latitude, dest.longitude) <= ARRIVAL_RADIUS_M:
+            transfer.arrived_near_at = now
+            transfer.save(update_fields=["arrived_near_at", "updated_at"])
+            _notify("transfer_changed", transfer.pk, "arriving")
+    return point
+
+
+def tracking_summary(transfer: Transfer):
+    """Where the goods are now, how far they still have to go and a rough arrival time."""
+    points = list(transfer.track_points.order_by("-recorded_at")[:300])
+    points.reverse()
+    src, dst = transfer.source, transfer.destination
+    last = points[-1] if points else None
+    place = lambda l: {"lat": l.latitude, "lng": l.longitude, "name": l.name} if l.has_map_point else None  # noqa: E731
+    out = {
+        "active": transfer.status == Transfer.Status.IN_TRANSIT,
+        "source": place(src),
+        "destination": place(dst),
+        "points": [{"lat": p.latitude, "lng": p.longitude, "at": p.recorded_at} for p in points],
+        "last": None,
+        "distance_left_m": None,
+        "eta_minutes": None,
+        "arrived_near_at": transfer.arrived_near_at,
+    }
+    if last:
+        out["last"] = {"lat": last.latitude, "lng": last.longitude, "at": last.recorded_at, "speed": last.speed,
+                       "accuracy": last.accuracy, "heading": last.heading,
+                       "seconds_ago": int((timezone.now() - last.recorded_at).total_seconds())}
+        if dst.has_map_point:
+            left = distance_m(last.latitude, last.longitude, dst.latitude, dst.longitude)
+            out["distance_left_m"] = round(left)
+            # Use the phone's speed when moving; otherwise ~15 km/h, typical for a tuk-tuk or boda in town traffic.
+            speed = last.speed if last.speed and last.speed > 1.5 else 15 / 3.6
+            out["eta_minutes"] = max(1, round(left * 1.3 / speed / 60))  # roads are ~30% longer than a straight line
+    return out
 
 
 def _check_available(location, lines):
@@ -313,20 +417,100 @@ def cancel_request(req: StockRequest, user):
 
 
 # ----------------------------------------------------------------------------- sales
+MPESA_CODE = re.compile(r"^[A-Z0-9]{10}$")
+
+
 @transaction.atomic
-def post_sale(sale: Sale, user):
-    _require(sale.location.can_sell, f"{sale.location.name} is a store, not a selling point. Transfer the goods to a shop first.")
-    _require(user.can_access(sale.location), "You don't work at this shop.")
+def post_sale(sale: Sale, user, mpesa_payment_id=None, deposit=None):
+    """
+    Take the goods off the shelf and settle the money:
+      cash / card / bank → paid in full now
+      M-Pesa             → the customer's confirmation code typed in, or a paid STK prompt sent to their phone
+      credit             → named customer with phone; optional deposit; respects the customer's credit limit
+    """
+    _require(sale.location.can_sell,
+             f"Selling is switched off at {sale.location.name}. An admin can switch it on in the store's settings.")
+    _require(user.can_access(sale.location), "You don't work at this store.")
     lines = list(sale.lines.select_related("variant__product"))
     _require(lines, "A sale needs at least one item.")
     _check_qty(lines)
-    _require(sale.discount <= sale.subtotal, "Discount can't be more than the total.")
+    for line in lines:
+        _require(line.variant.product.business_id == sale.location.business_id, "That product isn't in your catalogue.")
+        _require(line.unit_price >= 0, "Prices can't be negative.")
+    _require(ZERO <= sale.discount <= sale.subtotal, "Discount can't be more than the total.")
+    total = sale.total
+    method = sale.payment_method
+
+    if method == Sale.Payment.CREDIT:
+        _require(sale.customer_id, "Credit sales need the customer's name and phone number.", "customer_required")
+        deposit = Decimal(str(deposit or 0))
+        _require(ZERO <= deposit < total, "A deposit must be less than the total; otherwise it isn't a credit sale.")
+        customer = sale.customer
+        if customer.credit_limit > 0:
+            owed = customer.outstanding(exclude_sale=sale)
+            _require(owed + total - deposit <= customer.credit_limit,
+                     f"{customer.name} already owes KES {owed:,.0f} and the credit limit is KES {customer.credit_limit:,.0f}. "
+                     "Take a bigger deposit or collect the old debt first.", "credit_limit")
+        sale.amount_paid = deposit
+        sale.due_date = sale.due_date or (timezone.localdate() + timedelta(days=14))
+        paid_with = Sale.Payment.CASH
+    elif method == Sale.Payment.MPESA:
+        if mpesa_payment_id:
+            mp = (MpesaPayment.objects.select_for_update()
+                  .filter(pk=mpesa_payment_id, business_id=sale.location.business_id).first())
+            _require(mp is not None, "That M-Pesa payment wasn't found.")
+            _require(mp.status == MpesaPayment.Status.SUCCESS, "The customer hasn't completed the M-Pesa payment yet.", "mpesa_pending")
+            _require(mp.sale_id is None, f"M-Pesa payment {mp.receipt_number} is already used on another sale.", "mpesa_used")
+            _require(mp.amount >= total, f"M-Pesa received KES {mp.amount:,.0f} but the sale is KES {total:,.0f}.", "mpesa_short")
+            mp.sale = sale
+            mp.save(update_fields=["sale", "updated_at"])
+            sale.payment_reference = mp.receipt_number
+        else:
+            code = re.sub(r"\s+", "", sale.payment_reference or "").upper()
+            _require(MPESA_CODE.match(code),
+                     "Enter the 10-character M-Pesa code from the customer's message (e.g. SKL4ABCD12).", "mpesa_code")
+            used = (Sale.objects.filter(location__business_id=sale.location.business_id, payment_reference=code,
+                                        status=Sale.Status.COMPLETED).exclude(pk=sale.pk).first())
+            _require(used is None, f"M-Pesa code {code} was already used on {used.code if used else ''}.", "mpesa_used")
+            sale.payment_reference = code
+        sale.amount_paid = total
+        paid_with = method
+    else:
+        sale.amount_paid = total
+        paid_with = method
+
     levels = _lock_levels([(sale.location_id, l.variant_id) for l in lines])
     for line in lines:
         line.unit_cost = line.variant.cost_price
         line.save(update_fields=["unit_cost"])
         _apply(levels[(sale.location_id, line.variant_id)], -line.quantity, K.SALE, sale.code, user, line.unit_cost)
+    sale.save(update_fields=["amount_paid", "due_date", "payment_reference", "updated_at"])
+    if sale.amount_paid > 0:
+        SalePayment.objects.create(sale=sale, amount=sale.amount_paid, method=paid_with,
+                                   reference=sale.payment_reference, received_by=user)
     _after_commit_low_stock(levels.values())
+    return sale
+
+
+@transaction.atomic
+def record_sale_payment(sale: Sale, user, amount, method="cash", reference=""):
+    """The customer pays all or part of a credit sale."""
+    sale = Sale.objects.select_for_update().get(pk=sale.pk)
+    _require(user.can_access(sale.location), "You don't work at this store.")
+    _require(sale.status == Sale.Status.COMPLETED, "This sale was voided.")
+    try:
+        amount = Decimal(str(amount or 0))
+    except Exception:
+        raise StockError("Enter the amount received.", "bad_amount")
+    _require(amount > 0, "Enter the amount received.")
+    _require(amount <= sale.balance, f"Only KES {sale.balance:,.0f} is still owed on {sale.code}.")
+    _require(method in Sale.Payment.values and method != Sale.Payment.CREDIT, "Choose how the customer paid.")
+    reference = re.sub(r"\s+", "", reference or "").upper()
+    if method == Sale.Payment.MPESA:
+        _require(MPESA_CODE.match(reference), "Enter the 10-character M-Pesa code.", "mpesa_code")
+    sale.amount_paid += amount
+    sale.save(update_fields=["amount_paid", "updated_at"])
+    SalePayment.objects.create(sale=sale, amount=amount, method=method, reference=reference, received_by=user)
     return sale
 
 
@@ -394,13 +578,16 @@ def post_count(count: StockCount, user):
 # ----------------------------------------------------------------------------- reporting helpers
 def location_summary(location_ids):
     """Per-location totals used by the dashboard and location cards."""
-    out = defaultdict(lambda: {"items": 0, "units": ZERO, "value": ZERO, "low": 0, "out": 0})
-    for lv in StockLevel.objects.filter(location_id__in=location_ids).select_related("variant__product"):
+    out = defaultdict(lambda: {"items": 0, "units": ZERO, "value": ZERO, "retail": ZERO, "low": 0, "out": 0})
+    levels = StockLevel.objects.filter(location_id__in=location_ids, variant__is_active=True,
+                                       variant__product__is_active=True).select_related("variant__product")
+    for lv in levels:
         s = out[lv.location_id]
         if lv.quantity > 0:
             s["items"] += 1
             s["units"] += lv.quantity
             s["value"] += lv.quantity * lv.variant.cost_price
+            s["retail"] += lv.quantity * lv.variant.selling_price
         if lv.quantity <= 0:
             s["out"] += 1
         elif lv.is_low:

@@ -12,9 +12,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'apple-touch-icon-180x180.png', 'icon.svg'],
       manifest: {
-        name: 'StockFlow — Hardware Stock Control',
+        name: 'StockFlow',
         short_name: 'StockFlow',
-        description: 'Godown and shop stock: deliveries, transfers, sales, approvals and stock commands by SMS/WhatsApp.',
+        description: 'Shops and godowns in your pocket: sales, deliveries, transfers with live tracking, credit and M-Pesa.',
         start_url: '/',
         scope: '/',
         display: 'standalone',

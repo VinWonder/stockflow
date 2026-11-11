@@ -46,7 +46,8 @@ export const setSignedOutHandler = (fn: () => void) => {
   onSignedOut = fn;
 };
 
-const isAuthCall = (path: string) => path.includes('/auth/token') || path.includes('/auth/refresh');
+const isAuthCall = (path: string) =>
+  /\/auth\/(token|refresh|register|password\/(forgot|verify|reset))\//.test(path) || path.startsWith('/track/');
 
 type Query = Record<string, string | number | boolean | null | undefined>;
 
@@ -151,6 +152,7 @@ export const api = {
   get: <T = any>(path: string, query?: Query) => request<T>('GET', path, undefined, query),
   post: <T = any>(path: string, body: unknown = {}) => request<T>('POST', path, body),
   patch: <T = any>(path: string, body: unknown) => request<T>('PATCH', path, body),
+  del: <T = any>(path: string) => request<T>('DELETE', path),
 
   /** Reads a list endpoint whether or not it is paginated. */
   async list<T>(path: string, query?: Query): Promise<T[]> {

@@ -29,7 +29,8 @@ export function SuppliersScreen() {
                 <div className="col grow">
                   <span className="heavy">{s.name}</span>
                   {(s.contact_person || s.phone) && <span className="small">{[s.contact_person, s.phone].filter(Boolean).join(' · ')}</span>}
-                  <span className="small muted">{s.deliveries} deliveries · {money(s.total_supplied)} supplied</span>
+                  <span className="small muted">{s.deliveries} deliveries · {money(s.total_supplied)} supplied{s.product_count ? ` · ${s.product_count} products` : ''}</span>
+                  {Number(s.owed ?? 0) > 0 && <span className="small bold" style={{ color: '#C2410C' }}>You owe {money(s.owed)}</span>}
                 </div>
                 {s.phone && (
                   <a className="icon-btn" href={`tel:${s.phone}`} aria-label={`Call ${s.name}`}>

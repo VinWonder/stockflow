@@ -71,7 +71,7 @@ def simulate(request):
 def message_log(request):
     if not request.user.is_admin:
         return Response({"detail": "Admins only."}, status=403)
-    rows = MessageLog.objects.select_related("user")[:100]
+    rows = MessageLog.objects.filter(user__business_id=request.user.business_id).select_related("user")[:100]
     return Response([{"id": m.id, "direction": m.direction, "channel": m.channel, "phone": m.phone, "body": m.body,
                       "user": m.user.get_full_name() if m.user else None, "status": m.status, "result": m.result,
                       "created_at": m.created_at} for m in rows])

@@ -18,20 +18,19 @@ class Unresolved(Exception):
     pass
 
 
-def resolve_variant(tokens):
-    """SKU match first; otherwise product code + size/colour words. Raises Unresolved with a helpful hint."""
+def resolve_variant(tokens, business_id):
+    """SKU match first; otherwise product code + size/colour words. Raises Unresolved with a helpful hint.
+    Only products of the sender's own business are considered."""
+    mine = Variant.objects.filter(product__business_id=business_id, is_active=True).select_related("product")
     joined = "-".join(tokens)
     for sku in (joined, tokens[0]):
-        v = Variant.objects.filter(sku__iexact=sku, is_active=True).select_related("product").first()
+        v = mine.filter(sku__iexact=sku).first()
         if v:
             return v
-    v = Variant.objects.filter(barcode=tokens[0], is_active=True).first()
-    if v:
-        return v
     code, attrs = tokens[0], [t.lower() for t in tokens[1:]]
-    candidates = list(Variant.objects.filter(product__code__iexact=code, is_active=True).select_related("product"))
+    candidates = list(mine.filter(product__code__iexact=code))
     if not candidates:
-        candidates = list(Variant.objects.filter(product__name__icontains=code, is_active=True).select_related("product")[:20])
+        candidates = list(mine.filter(product__name__icontains=code)[:20])
     if not candidates:
         raise Unresolved(f"'{' '.join(tokens)}' not found")
 
@@ -55,7 +54,7 @@ def resolve_variant(tokens):
 
 
 def _location(code, user):
-    loc = Location.objects.filter(code__iexact=code, is_active=True).first()
+    loc = Location.objects.filter(business_id=user.business_id, code__iexact=code, is_active=True).first()
     if not loc:
         codes = ", ".join(Location.objects.filter(id__in=user.accessible_location_ids()).values_list("code", flat=True))
         raise Unresolved(f"No store called '{code}'. Your stores: {codes}")
@@ -103,7 +102,7 @@ def execute(user, text, channel):
     items, problems = [], []
     for item in cmd.items:
         try:
-            items.append((resolve_variant(item.tokens), item.quantity))
+            items.append((resolve_variant(item.tokens, user.business_id), item.quantity))
         except Unresolved as exc:
             problems.append(str(exc))
     if problems:
@@ -111,7 +110,7 @@ def execute(user, text, channel):
 
     with transaction.atomic():
         if cmd.action == "transfer":
-            dest = Location.objects.filter(code__iexact=cmd.destination, is_active=True).first()
+            dest = Location.objects.filter(business_id=user.business_id, code__iexact=cmd.destination, is_active=True).first()
             if not dest:
                 raise Unresolved(f"No store called '{cmd.destination}'.")
             t = Transfer(source=source, destination=dest, created_by=user, notes=f"Via {channel}: {text[:200]}")
@@ -151,7 +150,8 @@ def execute(user, text, channel):
 def _act_on_reference(user, cmd):
     prefix = cmd.reference[:3].rstrip("0123456789")
     if prefix == "SR":
-        req = StockRequest.objects.filter(code=cmd.reference).select_related("location").first()
+        req = (StockRequest.objects.filter(code=cmd.reference, location__business_id=user.business_id)
+               .select_related("location").first())
         if not req:
             raise Unresolved(f"{cmd.reference} not found.")
         if cmd.action == "confirm":
@@ -163,7 +163,7 @@ def _act_on_reference(user, cmd):
         services.reject_request(req, user, cmd.reason_text)
         return f"{req.code} rejected.", f"rejected {req.code}"
     if prefix == "TRF":
-        t = Transfer.objects.filter(code=cmd.reference).first()
+        t = Transfer.objects.filter(code=cmd.reference, source__business_id=user.business_id).first()
         if not t:
             raise Unresolved(f"{cmd.reference} not found.")
         if cmd.action == "approve":
@@ -180,20 +180,22 @@ def _stock_query(user, cmd):
     tokens = cmd.query_tokens
     locations = Location.objects.filter(id__in=user.accessible_location_ids(), is_active=True)
     loc = locations.filter(code__iexact=tokens[0]).first() if len(tokens) > 1 else None
-    if len(tokens) > 1 and not loc and Location.objects.filter(code__iexact=tokens[0]).exists():
+    if len(tokens) > 1 and not loc and Location.objects.filter(business_id=user.business_id, code__iexact=tokens[0]).exists():
         raise Unresolved(f"You are not assigned to {tokens[0]}.")
     if loc:
         tokens = tokens[1:]
         locations = [loc]
     try:
-        variants = [resolve_variant(tokens)]
+        variants = [resolve_variant(tokens, user.business_id)]
     except Unresolved:
-        variants = list(Variant.objects.filter(Q(product__code__iexact=tokens[0]) | Q(sku__istartswith=tokens[0]))[:6])
+        variants = list(Variant.objects.filter(Q(product__code__iexact=tokens[0]) | Q(sku__istartswith=tokens[0]),
+                                               product__business_id=user.business_id, is_active=True)[:6])
         if not variants:
             raise
     lines = []
     for v in variants:
         levels = StockLevel.objects.filter(variant=v, location__in=locations).select_related("location")
-        parts = ", ".join(f"{lv.location.code} {lv.quantity:g}" for lv in levels) or "none"
+        parts = ", ".join(f"{lv.location.code} {lv.quantity:g}{' (LOW)' if lv.is_low and lv.quantity > 0 else ''}"
+                          for lv in levels) or "none"
         lines.append(f"{v.sku}: {parts}")
     return "\n".join(lines)

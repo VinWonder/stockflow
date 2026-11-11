@@ -96,6 +96,7 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "inventory.pagination.Pagination",
     "PAGE_SIZE": 30,
     "EXCEPTION_HANDLER": "inventory.exceptions.api_exception_handler",
+    "DEFAULT_THROTTLE_RATES": {"anon": "60/min", "auth": "10/min"},
 }
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(hours=8),
@@ -122,6 +123,40 @@ MESSAGING = {
     "TWILIO_WHATSAPP_FROM": env("TWILIO_WHATSAPP_FROM", default=""),
 }
 CURRENCY = env("CURRENCY", default="KES")
+
+# Public address of the app, used in links sent by SMS (e.g. the driver's tracking link).
+# Leave empty to use the address the request came in on.
+PUBLIC_APP_URL = env("PUBLIC_APP_URL", default=RENDER_EXTERNAL_HOSTNAME and f"https://{RENDER_EXTERNAL_HOSTNAME}").rstrip("/")
+
+# Email (forgot-password codes) ------------------------------------------------
+# Gmail: turn on 2-Step Verification, create an App Password (Google Account → Security → App passwords)
+# and put it in EMAIL_HOST_PASSWORD. Without a password, emails are printed in the terminal instead.
+EMAIL_HOST = env("EMAIL_HOST", default="smtp.gmail.com")
+EMAIL_PORT = env.int("EMAIL_PORT", default=587)
+EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
+EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
+EMAIL_TIMEOUT = 20
+EMAIL_BACKEND = env("EMAIL_BACKEND", default=(
+    "django.core.mail.backends.smtp.EmailBackend" if EMAIL_HOST_PASSWORD else "django.core.mail.backends.console.EmailBackend"))
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default=f"StockFlow <{EMAIL_HOST_USER or 'no-reply@stockflow.local'}>")
+
+# M-Pesa (Safaricom Daraja STK push) ---------------------------------------------
+MPESA = {
+    "BACKEND": env("MPESA_BACKEND", default="console"),  # console (pretend, for testing) | daraja (real)
+    "ENV": env("MPESA_ENV", default="sandbox"),  # sandbox | production
+    "CONSUMER_KEY": env("MPESA_CONSUMER_KEY", default=""),
+    "CONSUMER_SECRET": env("MPESA_CONSUMER_SECRET", default=""),
+    "SHORTCODE": env("MPESA_SHORTCODE", default="174379"),  # paybill / store number (174379 = Daraja sandbox)
+    "PASSKEY": env("MPESA_PASSKEY", default=""),
+    "TRANSACTION_TYPE": env("MPESA_TRANSACTION_TYPE", default="CustomerPayBillOnline"),  # or CustomerBuyGoodsOnline (till)
+    "PARTY_B": env("MPESA_PARTY_B", default=""),  # till number for Buy Goods; blank = SHORTCODE
+    "CALLBACK_URL": env("MPESA_CALLBACK_URL", default=""),  # blank = https://<this server>/api/mpesa/callback/?token=…
+    "CALLBACK_TOKEN": env("MPESA_CALLBACK_TOKEN", default=env("INBOUND_TOKEN", default="change-me")),
+}
+
+# Google Maps (store locations and live tracking of transfers). A browser key restricted to your domain.
+GOOGLE_MAPS_API_KEY = env("GOOGLE_MAPS_API_KEY", default="")
 
 if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")

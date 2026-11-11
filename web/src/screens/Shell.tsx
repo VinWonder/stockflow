@@ -1,11 +1,12 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { Inbox, LayoutDashboard, LayoutGrid, Store } from 'lucide-react';
+import { Inbox, LayoutDashboard, LayoutGrid, ShoppingCart, Store } from 'lucide-react';
 
 import { useUnread } from '../lib/queries';
 
 const tabs = [
   { to: '/', label: 'Home', icon: LayoutDashboard, end: true },
   { to: '/stores', label: 'Stores', icon: Store },
+  { to: '/sell', label: 'Sell', icon: ShoppingCart },
   { to: '/inbox', label: 'Inbox', icon: Inbox, badge: true },
   { to: '/more', label: 'More', icon: LayoutGrid },
 ];

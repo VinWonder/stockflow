@@ -1,4 +1,4 @@
-"""python manage.py seed_demo  — creates stores, hardware products, a supplier, users and opening stock."""
+"""python manage.py seed_demo  — creates a demo business with stores, hardware products, a supplier, users and opening stock."""
 from datetime import date
 from decimal import Decimal as D
 
@@ -6,6 +6,7 @@ from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
+from accounts.models import Business
 from inventory import services
 from inventory.models import Category, Location, Product, Receipt, ReceiptLine, Supplier, Variant
 
@@ -26,44 +27,51 @@ CATALOGUE = [
 
 
 class Command(BaseCommand):
-    help = "Load demo stores, products, supplier, users and opening stock"
+    help = "Load a demo business: stores, products, supplier, users and opening stock"
 
     @transaction.atomic
     def handle(self, *args, **opts):
-        gdn, _ = Location.objects.get_or_create(code="GDN", defaults={"name": "Home Godown", "kind": "godown", "color": "#7C3AED", "can_sell": False})
-        main, _ = Location.objects.get_or_create(code="MAIN", defaults={"name": "Main Shop", "kind": "shop", "is_main": True, "color": "#2563EB"})
-        shp2, _ = Location.objects.get_or_create(code="SHP2", defaults={"name": "Shop 2 — Market", "kind": "shop", "color": "#059669"})
+        biz, _ = Business.objects.get_or_create(name="Demo Hardware", defaults={"phone": "254700000001"})
 
-        admin = User.objects.filter(is_superuser=True).first()
-        if not admin:
-            admin = User.objects.create_superuser("admin", "admin@example.com", "admin12345", phone="0700000001", first_name="Owner")
-        manager, created = User.objects.get_or_create(username="manager", defaults={
-            "first_name": "Godown", "last_name": "Manager", "role": "manager", "phone": "0700000002"})
-        if created:
-            manager.set_password("manager12345")
-            manager.save()
+        def store(code, **kw):
+            return Location.objects.get_or_create(business=biz, code=code, defaults=kw)[0]
+
+        gdn = store("GDN", name="Home Godown", kind="godown", color="#7C3AED", can_sell=False,
+                    address="Industrial Area, Nairobi", latitude=D("-1.308500"), longitude=D("36.851000"))
+        main = store("MAIN", name="Main Shop", kind="shop", is_main=True, color="#2563EB",
+                     address="Kirinyaga Road, Nairobi", latitude=D("-1.281900"), longitude=D("36.823300"))
+        shp2 = store("SHP2", name="Shop 2 — Market", kind="shop", color="#059669",
+                     address="Gikomba Market", latitude=D("-1.284700"), longitude=D("36.838900"))
+
+        def person(username, password, **kw):
+            user, created = User.objects.get_or_create(username=username, defaults={**kw, "business": biz})
+            if created:
+                user.set_password(password)
+                user.save()
+            return user
+
+        person("admin", "admin12345", role="admin", phone="0700000001", first_name="Owner", email="owner@demo.local")
+        manager = person("manager", "manager12345", role="manager", phone="0700000002", first_name="Godown", last_name="Manager")
         manager.locations.set([gdn, main])
-        staff, created = User.objects.get_or_create(username="shop2", defaults={"first_name": "Shop 2", "role": "staff", "phone": "0700000003"})
-        if created:
-            staff.set_password("shop212345")
-            staff.save()
+        staff = person("shop2", "shop212345", role="staff", phone="0700000003", first_name="Shop 2")
         staff.locations.set([shp2])
+        admin = User.objects.get(username="admin")
 
-        supplier, _ = Supplier.objects.get_or_create(name="Nairobi Hardware Distributors", defaults={
+        supplier, _ = Supplier.objects.get_or_create(business=biz, name="Nairobi Hardware Distributors", defaults={
             "contact_person": "John Kamau", "phone": "0722000000"})
 
         variants = []
-        for cat, icon, name, code, brand, unit, fractions, reorder, opts in CATALOGUE:
-            category, _ = Category.objects.get_or_create(name=cat, defaults={"icon": icon})
-            product, _ = Product.objects.get_or_create(code=code, defaults={
+        for cat, icon, name, code, brand, unit, fractions, reorder, options in CATALOGUE:
+            category, _ = Category.objects.get_or_create(business=biz, name=cat, defaults={"icon": icon})
+            product, _ = Product.objects.get_or_create(business=biz, code=code, defaults={
                 "name": name, "category": category, "brand": brand, "unit": unit, "allow_fractions": fractions,
                 "reorder_level": D(reorder)})
-            for size, colour, cost, price in opts:
+            for size, colour, cost, price in options:
                 v, _ = Variant.objects.get_or_create(product=product, size=size, colour=colour,
                                                      defaults={"selling_price": D(price)})
                 variants.append((v, D(cost)))
 
-        if not Receipt.objects.exists():
+        if not Receipt.objects.filter(location__business=biz).exists():
             for loc, factor in ((gdn, 10), (main, 3)):
                 r = Receipt.objects.create(location=loc, supplier=supplier, supplied_on=date.today(),
                                            invoice_number=f"OPEN-{loc.code}", created_by=admin, notes="Opening stock")
