@@ -1,33 +1,12 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Eye, EyeOff, KeyRound, Lock, Mail, Package, Server, User } from 'lucide-react';
+import { ArrowLeft, Eye, EyeOff, KeyRound, Lock, Mail, Package, User } from 'lucide-react';
 
-import { api, getBaseUrl, setBaseUrl } from '../lib/api';
+import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { Card, Spinner } from '../ui/common';
-import { Dialog, useOverlay } from '../ui/overlay';
+import { useOverlay } from '../ui/overlay';
 import { InstallBanner } from '../ui/install';
-
-function ServerDialog({ close }: { close: (v?: string) => void }) {
-  const [url, setUrl] = useState(getBaseUrl());
-  return (
-    <Dialog
-      onClose={() => close()}
-      title="Server address"
-      actions={
-        <>
-          <button className="btn text" onClick={() => close()}>Cancel</button>
-          <button className="btn small" onClick={() => close(url.trim())}>Save</button>
-        </>
-      }
-    >
-      <input className="input" type="url" autoFocus value={url} onChange={(e) => setUrl(e.target.value)} placeholder="/api" />
-      <p className="tiny muted" style={{ marginTop: 10, whiteSpace: 'pre-line' }}>
-        {'Leave as /api when the app is opened from the server itself.\nOther server: https://your-domain/api'}
-      </p>
-    </Dialog>
-  );
-}
 
 export function PasswordInput({ value, onChange, placeholder = 'Password', autoComplete = 'current-password' }: {
   value: string;
@@ -49,20 +28,11 @@ export function PasswordInput({ value, onChange, placeholder = 'Password', autoC
 
 /** Dark header with the logo, shared by sign-in, sign-up and reset. */
 export function AuthFrame({ title, subtitle, children, onBack }: { title: string; subtitle: string; children: React.ReactNode; onBack?: () => void }) {
-  const overlay = useOverlay();
-  const [server, setServer] = useState(getBaseUrl());
-  const changeServer = async () => {
-    const value = await overlay.open<string>((close) => <ServerDialog close={close} />);
-    if (!value) return;
-    setBaseUrl(value);
-    setServer(getBaseUrl());
-    overlay.success(`Server set to ${getBaseUrl()}`);
-  };
   return (
     <div style={{ position: 'relative', minHeight: '100dvh' }}>
       <div className="login-bg" />
       <div className="login">
-        <div className="row">
+        <div className="row" style={{ minHeight: 54 }}>
           {onBack ? (
             <button className="icon-btn" onClick={onBack} aria-label="Back" style={{ color: '#fff' }}>
               <ArrowLeft size={22} />
@@ -72,15 +42,10 @@ export function AuthFrame({ title, subtitle, children, onBack }: { title: string
               <Package size={30} />
             </span>
           )}
-          <span className="grow" />
-          <button className="icon-btn" onClick={changeServer} aria-label="Server address" title="Server address" style={{ color: 'rgba(255,255,255,.7)' }}>
-            <Server size={22} />
-          </button>
         </div>
         <h1 style={{ color: '#fff', fontSize: 32, fontWeight: 800, letterSpacing: -1, margin: '24px 0 6px' }}>{title}</h1>
         <p style={{ color: 'rgba(255,255,255,.75)', fontSize: 15.5, margin: '0 0 32px' }}>{subtitle}</p>
         {children}
-        <p className="tiny muted" style={{ textAlign: 'center', marginTop: 16 }}>Server: {server}</p>
       </div>
     </div>
   );
