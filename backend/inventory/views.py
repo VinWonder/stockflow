@@ -713,6 +713,7 @@ def app_config(request):
         "sms_live": settings.MESSAGING["SMS_BACKEND"] != "console",
         "vehicles": [{"value": v, "label": l} for v, l in Vehicle.choices],
         "email_reset": True,
+        "signup_email_code": settings.SIGNUP_EMAIL_CODE,
     })
 
 

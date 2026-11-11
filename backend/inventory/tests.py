@@ -4,7 +4,7 @@ from decimal import Decimal as D
 from django.contrib.auth import get_user_model
 from django.core import mail
 from django.core.management import call_command
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from accounts.models import Business
@@ -310,6 +310,15 @@ class AccountTests(TestCase):
             "stores": [{"name": "Ruiru Godown", "kind": "godown"}, {"name": "Juja Shop", "kind": "shop"}], **extra,
         }, format="json")
 
+    def test_sign_up_without_email_code_while_switched_off(self):
+        r = self.api.post("/api/auth/register/", {
+            "business_name": "Otieno Hardware", "full_name": "Jane Otieno", "email": "jane@shop.co.ke",
+            "phone": "0733000555", "password": "Strong-pass-2026", "main_shop": {"name": "Otieno Main"},
+        }, format="json")
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertFalse(self.api.get("/api/config/").data["signup_email_code"])
+
+    @override_settings(SIGNUP_EMAIL_CODE=True)
     def test_sign_up_creates_business_main_shop_and_stores(self):
         bad = self.api.post("/api/auth/register/", {"email": "x@y.co", "email_code": "123456", "business_name": "X",
                                                     "full_name": "X", "phone": "0733000999", "password": "Strong-pass-2026",

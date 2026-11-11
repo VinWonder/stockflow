@@ -138,7 +138,7 @@ class RegisterSerializer(serializers.Serializer):
     phone = serializers.CharField(max_length=20)
     username = serializers.CharField(max_length=150, required=False, allow_blank=True)
     password = serializers.CharField(write_only=True, min_length=8)
-    email_code = serializers.RegexField(r"^\s*\d{6}\s*$", write_only=True,
+    email_code = serializers.RegexField(r"^\s*\d{6}\s*$", write_only=True, required=False, allow_blank=True,
                                         error_messages={"invalid": "Enter the 6-digit code sent to your email."})
     main_shop = StoreInput()
     stores = StoreInput(many=True, required=False)
@@ -168,11 +168,15 @@ class RegisterSerializer(serializers.Serializer):
         return _check_password(value)
 
     def validate(self, data):
+        from django.conf import settings
+
         from .models import SignupCode
 
-        entry = SignupCode.latest(data["email"])
-        if not entry or not entry.matches(data["email_code"]):
-            raise serializers.ValidationError({"email_code": "That code is wrong or has expired. Ask for a new one."})
+        entry = None
+        if settings.SIGNUP_EMAIL_CODE:
+            entry = SignupCode.latest(data["email"])
+            if not entry or not entry.matches(data.get("email_code") or ""):
+                raise serializers.ValidationError({"email_code": "That code is wrong or has expired. Ask for a new one."})
         data["_code_entry"] = entry
         stores = [data["main_shop"]] + list(data.get("stores") or [])
         names = [s["name"].strip().lower() for s in stores]
@@ -189,8 +193,9 @@ class RegisterSerializer(serializers.Serializer):
 
         entry = data.pop("_code_entry")
         data.pop("email_code", None)
-        entry.used = True
-        entry.save(update_fields=["used"])
+        if entry:
+            entry.used = True
+            entry.save(update_fields=["used"])
 
         business = Business.objects.create(name=data["business_name"].strip(), email=data["email"], phone=data["phone"],
                                            address=data["main_shop"].get("address", ""))

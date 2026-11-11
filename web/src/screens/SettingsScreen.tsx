@@ -159,7 +159,7 @@ function MpesaSection() {
           the right amount, used only once.
         </p>
         <Field label="Paybill number, or till store number">
-          <input className="input" inputMode="numeric" placeholder="e.g. 522522" value={number} onChange={(e) => setNumber(e.target.value.replace(/D/g, ''))} />
+          <input className="input" inputMode="numeric" placeholder="e.g. 522522" value={number} onChange={(e) => setNumber(e.target.value.replace(/\D/g, ''))} />
         </Field>
         <div className="small bold" style={{ color: st?.codes_checked ? 'var(--success)' : 'var(--muted)' }}>
           {st?.codes_checked

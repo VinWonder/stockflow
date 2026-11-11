@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Building2, Check, KeyRound, Mail, Phone, Plus, Store, Trash2, User, Warehouse } from 'lucide-react';
 
 import { api } from '../lib/api';
+import { useConfig } from '../lib/queries';
 import { Card, Field, Segmented, Spinner } from '../ui/common';
 import { useOverlay } from '../ui/overlay';
 import { PositionField, type Position } from '../ui/PositionField';
@@ -36,6 +37,9 @@ export function SignupScreen() {
   const [stores, setStores] = useState<StoreDraft[]>([{ name: '', kind: 'godown', address: '' }]);
   const [busy, setBusy] = useState(false);
   const [code, setCode] = useState('');
+  // The email-code step is switched on from the server (SIGNUP_EMAIL_CODE); while it's off, step 1 is skipped.
+  const needCode = !!useConfig().data?.signup_email_code;
+  const shown = STEPS.map((label, index) => ({ label, index })).filter((s) => needCode || s.index !== 1);
 
   const sendCode = async () => {
     setBusy(true);
@@ -59,10 +63,11 @@ export function SignupScreen() {
       if (password.length < 8) return overlay.error('Choose a password with at least 8 characters.');
       if (password !== password2) return overlay.error("The two passwords don't match.");
       if (!mainName) setMainName(`${business.trim()} Main Shop`);
+      if (!needCode) return setStep(2);
       if (!(await sendCode())) return;
     }
     if (step === 1) {
-      if (!/^d{6}$/.test(code)) return overlay.error('Enter the 6-digit code from the email.');
+      if (!/^\d{6}$/.test(code)) return overlay.error('Enter the 6-digit code from the email.');
       setBusy(true);
       try {
         await api.post('/auth/register/verify/', { email: email.trim(), code });
@@ -86,7 +91,7 @@ export function SignupScreen() {
     setBusy(true);
     try {
       await api.post('/auth/register/', {
-        email_code: code,
+        email_code: needCode ? code : '',
         business_name: business.trim(),
         full_name: fullName.trim(),
         email: email.trim(),
@@ -108,13 +113,13 @@ export function SignupScreen() {
     <AuthFrame
       title="Create account"
       subtitle="Your business, its main shop and every shop and godown under it."
-      onBack={() => (step === 0 ? navigate('/', { replace: true }) : setStep(step - 1))}
+      onBack={() => (step === 0 ? navigate('/', { replace: true }) : setStep(step === 2 && !needCode ? 0 : step - 1))}
     >
       <div className="stepper">
-        {STEPS.map((s, i) => (
-          <div key={s} className={`step${i === step ? ' on' : ''}${i < step ? ' done' : ''}`}>
-            <span>{i < step ? <Check size={14} strokeWidth={3} /> : i + 1}</span>
-            {s}
+        {shown.map(({ label, index }, i) => (
+          <div key={label} className={`step${index === step ? ' on' : ''}${index < step ? ' done' : ''}`}>
+            <span>{index < step ? <Check size={14} strokeWidth={3} /> : i + 1}</span>
+            {label}
           </div>
         ))}
       </div>
@@ -139,7 +144,7 @@ export function SignupScreen() {
             </div>
             <PasswordInput value={password} onChange={setPassword} placeholder="Password (8+ characters)" autoComplete="new-password" />
             <PasswordInput value={password2} onChange={setPassword2} placeholder="Type the password again" autoComplete="new-password" />
-            <button className="btn block" disabled={busy} onClick={next}>{busy ? <Spinner /> : 'Next: confirm email'}</button>
+            <button className="btn block" disabled={busy} onClick={next}>{busy ? <Spinner /> : needCode ? 'Next: confirm email' : 'Next: main shop'}</button>
           </div>
         )}
 
@@ -157,7 +162,7 @@ export function SignupScreen() {
                 maxLength={6}
                 style={{ letterSpacing: 6, fontWeight: 800, fontSize: 18 }}
                 value={code}
-                onChange={(e) => setCode(e.target.value.replace(/D/g, ''))}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
               />
             </div>
             <button className="btn block" disabled={busy} onClick={next}>{busy ? <Spinner /> : 'Confirm email'}</button>

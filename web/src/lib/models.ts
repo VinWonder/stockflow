@@ -275,6 +275,7 @@ export interface AppConfig {
   mpesa_prompt: boolean;
   mpesa_simulated: boolean;
   sms_live?: boolean;
+  signup_email_code?: boolean;
   vehicles: { value: string; label: string }[];
 }
 
