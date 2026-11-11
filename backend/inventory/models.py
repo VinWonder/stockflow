@@ -295,9 +295,31 @@ class StockMovement(models.Model):
 
 
 # ----------------------------------------------------------------------------- documents
+class DocumentCounter(models.Model):
+    """Running number per business and document type, so every business starts at GRN00001, SAL00001…"""
+
+    business = models.ForeignKey(BUSINESS, on_delete=models.CASCADE, related_name="+")
+    prefix = models.CharField(max_length=5)
+    last = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["business", "prefix"], name="one_counter_per_business_prefix")]
+
+    @classmethod
+    def next(cls, business_id, prefix):
+        from django.db import transaction
+
+        with transaction.atomic():
+            counter, _ = cls.objects.select_for_update().get_or_create(business_id=business_id, prefix=prefix)
+            counter.last += 1
+            counter.save(update_fields=["last"])
+            return counter.last
+
+
 class Document(TimeStamped):
     PREFIX = "DOC"
-    code = models.CharField(max_length=20, unique=True, editable=False, null=True)
+    code = models.CharField(max_length=20, db_index=True, editable=False, null=True,
+                            help_text="Numbered per business: GRN00001, TRF00001…")
     client_uuid = models.UUIDField(null=True, blank=True, unique=True,
                                    help_text="Sent by the app so a retried request never creates a duplicate")
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+")
@@ -307,7 +329,15 @@ class Document(TimeStamped):
         abstract = True
         ordering = ["-created_at"]
 
+    def business_id_for_code(self):
+        loc = getattr(self, "location", None) or getattr(self, "source", None)
+        return loc.business_id if loc else None
+
     def save(self, *args, **kwargs):
+        if not self.code:
+            biz = self.business_id_for_code()
+            if biz:
+                self.code = f"{self.PREFIX}{DocumentCounter.next(biz, self.PREFIX):05d}"
         super().save(*args, **kwargs)
         if not self.code:
             self.code = f"{self.PREFIX}{self.pk:05d}"
@@ -600,6 +630,34 @@ class MpesaPayment(TimeStamped):
 
     def __str__(self):
         return f"{self.phone} {self.amount} {self.status}"
+
+
+class MpesaTransaction(models.Model):
+    """A payment Safaricom reported to us (C2B confirmation) for a business's paybill / till.
+
+    When a cashier types the customer's M-Pesa code, it is checked against these records, so only
+    money that really arrived can be used, and only once.
+    """
+
+    business = models.ForeignKey(BUSINESS, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    trans_id = models.CharField(max_length=20, unique=True)
+    trans_type = models.CharField(max_length=40, blank=True)
+    amount = models.DecimalField(**MONEY)
+    shortcode = models.CharField(max_length=12, db_index=True)
+    bill_ref = models.CharField(max_length=40, blank=True)
+    msisdn = models.CharField(max_length=80, blank=True, help_text="Safaricom masks or hashes the payer's number")
+    payer_name = models.CharField(max_length=120, blank=True)
+    trans_time = models.DateTimeField(null=True, blank=True)
+    sale = models.ForeignKey(Sale, null=True, blank=True, on_delete=models.SET_NULL, related_name="mpesa_transactions")
+    used_for = models.CharField(max_length=30, blank=True, help_text="Sale or credit payment it was used on")
+    raw = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.trans_id} {self.amount}"
 
 
 class StockCount(Document):

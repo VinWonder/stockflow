@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Building2, Check, Mail, Phone, Plus, Store, Trash2, User, Warehouse } from 'lucide-react';
+import { Building2, Check, KeyRound, Mail, Phone, Plus, Store, Trash2, User, Warehouse } from 'lucide-react';
 
 import { api } from '../lib/api';
-import { useAuth } from '../lib/auth';
 import { Card, Field, Segmented, Spinner } from '../ui/common';
 import { useOverlay } from '../ui/overlay';
 import { PositionField, type Position } from '../ui/PositionField';
@@ -15,7 +14,7 @@ interface StoreDraft {
   address: string;
 }
 
-const STEPS = ['You', 'Main shop', 'Other stores'];
+const STEPS = ['You', 'Confirm email', 'Main shop', 'Other stores'];
 
 /**
  * Open a client account without any back-office help: the business (a main shop with several stores),
@@ -24,7 +23,6 @@ const STEPS = ['You', 'Main shop', 'Other stores'];
 export function SignupScreen() {
   const navigate = useNavigate();
   const overlay = useOverlay();
-  const { signInWith } = useAuth();
   const [step, setStep] = useState(0);
   const [business, setBusiness] = useState('');
   const [fullName, setFullName] = useState('');
@@ -37,8 +35,23 @@ export function SignupScreen() {
   const [mainPos, setMainPos] = useState<Position | null>(null);
   const [stores, setStores] = useState<StoreDraft[]>([{ name: '', kind: 'godown', address: '' }]);
   const [busy, setBusy] = useState(false);
+  const [code, setCode] = useState('');
 
-  const next = () => {
+  const sendCode = async () => {
+    setBusy(true);
+    try {
+      await api.post('/auth/register/code/', { email: email.trim() });
+      overlay.success(`Code sent to ${email.trim()}. Check your inbox (and spam).`);
+      return true;
+    } catch (e) {
+      overlay.error(e);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const next = async () => {
     if (step === 0) {
       if (!business.trim() || !fullName.trim()) return overlay.error('Enter your business name and your name.');
       if (!/^\S+@\S+\.\S+$/.test(email.trim())) return overlay.error('Enter a valid email: password reset codes are sent there.');
@@ -46,8 +59,20 @@ export function SignupScreen() {
       if (password.length < 8) return overlay.error('Choose a password with at least 8 characters.');
       if (password !== password2) return overlay.error("The two passwords don't match.");
       if (!mainName) setMainName(`${business.trim()} Main Shop`);
+      if (!(await sendCode())) return;
     }
-    if (step === 1 && !mainName.trim()) return overlay.error('Give your main shop a name.');
+    if (step === 1) {
+      if (!/^d{6}$/.test(code)) return overlay.error('Enter the 6-digit code from the email.');
+      setBusy(true);
+      try {
+        await api.post('/auth/register/verify/', { email: email.trim(), code });
+      } catch (e) {
+        return overlay.error(e);
+      } finally {
+        setBusy(false);
+      }
+    }
+    if (step === 2 && !mainName.trim()) return overlay.error('Give your main shop a name.');
     setStep(step + 1);
   };
 
@@ -60,7 +85,8 @@ export function SignupScreen() {
     }
     setBusy(true);
     try {
-      const r = await api.post<{ access: string; refresh: string }>('/auth/register/', {
+      await api.post('/auth/register/', {
+        email_code: code,
         business_name: business.trim(),
         full_name: fullName.trim(),
         email: email.trim(),
@@ -69,9 +95,8 @@ export function SignupScreen() {
         main_shop: { name: mainName.trim(), address: mainAddress.trim(), latitude: mainPos?.lat.toFixed(6) ?? null, longitude: mainPos?.lng.toFixed(6) ?? null },
         stores: extra.map((s) => ({ name: s.name.trim(), kind: s.kind, address: s.address.trim() })),
       });
-      await signInWith(r.access, r.refresh);
-      navigate('/', { replace: true });
-      overlay.success(`Welcome to StockFlow! ${1 + extra.length} store${extra.length ? 's' : ''} created.`);
+      navigate('/', { replace: true, state: { signedUp: true, login: email.trim() } });
+      overlay.success(`Account created with ${1 + extra.length} store${extra.length ? 's' : ''}. Sign in to start.`);
     } catch (e) {
       overlay.error(e);
     } finally {
@@ -114,11 +139,33 @@ export function SignupScreen() {
             </div>
             <PasswordInput value={password} onChange={setPassword} placeholder="Password (8+ characters)" autoComplete="new-password" />
             <PasswordInput value={password2} onChange={setPassword2} placeholder="Type the password again" autoComplete="new-password" />
-            <button className="btn block" onClick={next}>Next: main shop</button>
+            <button className="btn block" disabled={busy} onClick={next}>{busy ? <Spinner /> : 'Next: confirm email'}</button>
           </div>
         )}
 
         {step === 1 && (
+          <div className="stack">
+            <p className="small" style={{ margin: 0 }}>We sent a 6-digit code to <b>{email.trim()}</b>. Enter it to confirm the email is yours.</p>
+            <div className="input-wrap">
+              <KeyRound size={20} />
+              <input
+                className="input"
+                autoFocus
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                placeholder="6-digit code"
+                maxLength={6}
+                style={{ letterSpacing: 6, fontWeight: 800, fontSize: 18 }}
+                value={code}
+                onChange={(e) => setCode(e.target.value.replace(/D/g, ''))}
+              />
+            </div>
+            <button className="btn block" disabled={busy} onClick={next}>{busy ? <Spinner /> : 'Confirm email'}</button>
+            <button className="btn text block" disabled={busy} onClick={sendCode}>Send a new code</button>
+          </div>
+        )}
+
+        {step === 2 && (
           <div className="stack">
             <p className="small" style={{ margin: 0 }}>Your <b>main shop</b> is the head office: it sells, receives deliveries and sends stock to the other stores.</p>
             <Field label="Main shop name">
@@ -132,7 +179,7 @@ export function SignupScreen() {
           </div>
         )}
 
-        {step === 2 && (
+        {step === 3 && (
           <div className="stack">
             <p className="small" style={{ margin: 0 }}>Add the other shops and godowns you have. You can add more, set their map positions and add staff later.</p>
             {stores.map((s, i) => (

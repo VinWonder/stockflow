@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Eye, EyeOff, KeyRound, Lock, Mail, Package, User } from 'lucide-react';
 
 import { api } from '../lib/api';
@@ -55,8 +55,10 @@ export function LoginScreen() {
   const { login } = useAuth();
   const overlay = useOverlay();
   const navigate = useNavigate();
+  const arrived = (useLocation().state ?? {}) as { signedUp?: boolean; login?: string };
   const [mode, setMode] = useState<'login' | 'forgot'>('login');
-  const [username, setUsername] = useState('');
+  const [notice, setNotice] = useState(arrived.signedUp ? 'Your account is ready. Sign in with your email and password.' : '');
+  const [username, setUsername] = useState(arrived.login ?? '');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -76,13 +78,27 @@ export function LoginScreen() {
     }
   };
 
-  if (mode === 'forgot') return <ForgotPassword initialEmail={username.includes('@') ? username : ''} onBack={() => setMode('login')} />;
+  if (mode === 'forgot') {
+    return (
+      <ForgotPassword
+        initialEmail={username.includes('@') ? username : ''}
+        onBack={() => setMode('login')}
+        onDone={(login) => {
+          setUsername(login);
+          setPassword('');
+          setNotice('Password changed. Sign in with your new password.');
+          setMode('login');
+        }}
+      />
+    );
+  }
 
   return (
     <AuthFrame title="StockFlow" subtitle="Shops and godowns, in your pocket.">
       <Card style={{ padding: 20 }}>
         <form className="stack" onSubmit={submit}>
           <div className="heavy" style={{ fontSize: 20 }}>Sign in</div>
+          {notice && <div className="notice">{notice}</div>}
           <div className="input-wrap">
             <User size={20} />
             <input className="input" autoComplete="username" placeholder="Username or email" autoCapitalize="none" value={username} onChange={(e) => setUsername(e.target.value)} />
@@ -110,65 +126,62 @@ export function LoginScreen() {
   );
 }
 
-/** Forgot password: email → 6-digit code by email → new password. */
-function ForgotPassword({ initialEmail, onBack }: { initialEmail: string; onBack: () => void }) {
-  const { signInWith } = useAuth();
+/** Forgot password: email → confirm the 6-digit code → new password → back to sign in. */
+function ForgotPassword({ initialEmail, onBack, onDone }: { initialEmail: string; onBack: () => void; onDone: (login: string) => void }) {
   const overlay = useOverlay();
-  const [step, setStep] = useState<'email' | 'code'>('email');
+  const [step, setStep] = useState<'email' | 'code' | 'password'>('email');
   const [email, setEmail] = useState(initialEmail);
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
   const [password2, setPassword2] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const sendCode = async (e?: FormEvent) => {
-    e?.preventDefault();
-    if (!email.trim()) {
-      overlay.error('Enter the email on your account.');
-      return;
-    }
+  const run = async (fn: () => Promise<void>) => {
     setBusy(true);
     try {
+      await fn();
+    } catch (err) {
+      overlay.error(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const sendCode = (e?: FormEvent) => {
+    e?.preventDefault();
+    if (!email.trim()) return overlay.error('Enter the email on your account.');
+    return run(async () => {
       await api.post('/auth/password/forgot/', { email: email.trim() });
       setStep('code');
       overlay.success('If the account exists, a code is on its way. Check your inbox (and spam).');
-    } catch (err) {
-      overlay.error(err);
-    } finally {
-      setBusy(false);
-    }
+    });
   };
 
-  const reset = async (e: FormEvent) => {
+  const confirmCode = (e: FormEvent) => {
     e.preventDefault();
-    if (!/^\d{6}$/.test(code.trim())) {
-      overlay.error('Enter the 6-digit code from the email.');
-      return;
-    }
-    if (password.length < 8) {
-      overlay.error('The new password needs at least 8 characters.');
-      return;
-    }
-    if (password !== password2) {
-      overlay.error("The two passwords don't match.");
-      return;
-    }
-    setBusy(true);
-    try {
-      const r = await api.post<{ access: string; refresh: string }>('/auth/password/reset/', { email: email.trim(), code: code.trim(), new_password: password });
-      await signInWith(r.access, r.refresh);
-      overlay.success('Password changed. Welcome back!');
-    } catch (err) {
-      overlay.error(err);
-    } finally {
-      setBusy(false);
-    }
+    if (!/^d{6}$/.test(code)) return overlay.error('Enter the 6-digit code from the email.');
+    return run(async () => {
+      await api.post('/auth/password/verify/', { email: email.trim(), code });
+      setStep('password');
+    });
   };
+
+  const reset = (e: FormEvent) => {
+    e.preventDefault();
+    if (password.length < 8) return overlay.error('The new password needs at least 8 characters.');
+    if (password !== password2) return overlay.error("The two passwords don't match.");
+    return run(async () => {
+      await api.post('/auth/password/reset/', { email: email.trim(), code, new_password: password });
+      onDone(email.trim());
+    });
+  };
+
+  const titles = { email: "We'll email you a 6-digit code.", code: 'Enter the code from the email.', password: 'Choose a new password.' };
 
   return (
-    <AuthFrame title="Reset password" subtitle="We'll email you a 6-digit code." onBack={onBack}>
+    <AuthFrame title="Reset password" subtitle={titles[step]} onBack={step === 'email' ? onBack : () => setStep(step === 'password' ? 'code' : 'email')}>
       <Card style={{ padding: 20 }}>
-        {step === 'email' ? (
+        {step === 'email' && (
           <form className="stack" onSubmit={sendCode}>
             <div className="input-wrap">
               <Mail size={20} />
@@ -176,9 +189,10 @@ function ForgotPassword({ initialEmail, onBack }: { initialEmail: string; onBack
             </div>
             <button className="btn block" type="submit" disabled={busy}>{busy ? <Spinner /> : 'Send code'}</button>
           </form>
-        ) : (
-          <form className="stack" onSubmit={reset}>
-            <p className="small" style={{ margin: 0 }}>Enter the code sent to <b>{email}</b>. It works for 15 minutes.</p>
+        )}
+        {step === 'code' && (
+          <form className="stack" onSubmit={confirmCode}>
+            <p className="small" style={{ margin: 0 }}>We sent a code to <b>{email}</b>. It works for 15 minutes.</p>
             <div className="input-wrap">
               <KeyRound size={20} />
               <input
@@ -190,13 +204,18 @@ function ForgotPassword({ initialEmail, onBack }: { initialEmail: string; onBack
                 maxLength={6}
                 style={{ letterSpacing: 6, fontWeight: 800, fontSize: 18 }}
                 value={code}
-                onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+                onChange={(e) => setCode(e.target.value.replace(/D/g, ''))}
               />
             </div>
+            <button className="btn block" type="submit" disabled={busy}>{busy ? <Spinner /> : 'Confirm code'}</button>
+            <button type="button" className="btn text block" disabled={busy} onClick={() => sendCode()}>Send a new code</button>
+          </form>
+        )}
+        {step === 'password' && (
+          <form className="stack" onSubmit={reset}>
             <PasswordInput value={password} onChange={setPassword} placeholder="New password (8+ characters)" autoComplete="new-password" />
             <PasswordInput value={password2} onChange={setPassword2} placeholder="Type it again" autoComplete="new-password" />
-            <button className="btn block" type="submit" disabled={busy}>{busy ? <Spinner /> : 'Change password & sign in'}</button>
-            <button type="button" className="btn text block" disabled={busy} onClick={() => sendCode()}>Send a new code</button>
+            <button className="btn block" type="submit" disabled={busy}>{busy ? <Spinner /> : 'Change password'}</button>
           </form>
         )}
       </Card>

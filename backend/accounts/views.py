@@ -60,15 +60,61 @@ def _tokens(user):
     return {"access": str(refresh.access_token), "refresh": str(refresh)}
 
 
+def _send_code(email, subject, intro, code, minutes):
+    send_mail(
+        subject=subject,
+        message=f"{intro}\n\n    {code}\n\nIt works for {minutes} minutes. If you didn't ask for this, ignore this email.\n\nStockFlow",
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        recipient_list=[email],
+    )
+
+
+@api_view(["POST"])
+@permission_classes([permissions.AllowAny])
+@throttle_classes([AuthThrottle])
+def signup_code(request):
+    """Step 1 of opening an account: email a 6-digit code to prove the email belongs to the owner."""
+    from .models import SignupCode
+
+    email = (request.data.get("email") or "").strip().lower()
+    if "@" not in email or "." not in email.split("@")[-1]:
+        raise ValidationError({"email": "Enter a valid email address."})
+    if User.objects.filter(email__iexact=email).exists():
+        raise ValidationError({"email": "An account with this email already exists. Sign in or reset your password."})
+    code = SignupCode.issue(email)
+    try:
+        _send_code(email, f"Your StockFlow code: {code}", "Welcome to StockFlow. Your code to confirm your email is:",
+                   code, int(SignupCode.LIFETIME.total_seconds() // 60))
+    except Exception:  # noqa: BLE001
+        log.exception("Sending the sign-up code failed")
+        return Response({"detail": "We couldn't send the email right now. Check the address or try again in a minute."},
+                        status=503)
+    return Response({"detail": f"A 6-digit code was sent to {email}."})
+
+
+@api_view(["POST"])
+@permission_classes([permissions.AllowAny])
+@throttle_classes([AuthThrottle])
+def signup_verify(request):
+    """Check the emailed code before the owner fills in the stores (the code is used up when the account is created)."""
+    from .models import SignupCode
+
+    entry = SignupCode.latest(request.data.get("email"))
+    if not entry or not entry.matches(request.data.get("code")):
+        raise ValidationError({"code": "That code is wrong or has expired. Ask for a new one."})
+    return Response({"ok": True})
+
+
 @api_view(["POST"])
 @permission_classes([permissions.AllowAny])
 @throttle_classes([AuthThrottle])
 def register(request):
-    """Create a client account in the app (no Django admin needed) and sign straight in."""
+    """Create a client account (email already confirmed with a code). The owner then signs in."""
     s = RegisterSerializer(data=request.data)
     s.is_valid(raise_exception=True)
     user = s.save()
-    return Response({**_tokens(user), "user": MeSerializer(user).data}, status=status.HTTP_201_CREATED)
+    return Response({"detail": "Account created. Sign in to continue.", "username": user.username, "email": user.email},
+                    status=status.HTTP_201_CREATED)
 
 
 @api_view(["GET", "PATCH"])
@@ -126,14 +172,9 @@ def forgot_password(request):
         code = PasswordResetCode.issue(user)
         name = user.first_name or user.username
         try:
-            send_mail(
-                subject=f"Your StockFlow reset code: {code}",
-                message=(f"Hi {name},\n\nYour StockFlow password reset code is:\n\n    {code}\n\n"
-                         f"It works for {int(PasswordResetCode.LIFETIME.total_seconds() // 60)} minutes. "
-                         "If you didn't ask for this, ignore this email; your password stays the same.\n\nStockFlow"),
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[user.email],
-            )
+            _send_code(user.email, f"Your StockFlow reset code: {code}",
+                       f"Hi {name},\n\nYour StockFlow password reset code is:", code,
+                       int(PasswordResetCode.LIFETIME.total_seconds() // 60))
         except Exception:  # noqa: BLE001 - SMTP errors must not reveal whether the account exists
             log.exception("Sending the reset email to user %s failed", user.pk)
             return Response({"detail": "We couldn't send the email right now. Try again in a minute."}, status=503)
@@ -172,4 +213,4 @@ def reset_password(request):
     user.save()
     entry.used = True
     entry.save(update_fields=["used"])
-    return Response({**_tokens(user), "detail": "Password changed. You're signed in."})
+    return Response({"detail": "Password changed. Sign in with your new password.", "username": user.username})

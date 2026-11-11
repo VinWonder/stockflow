@@ -179,3 +179,92 @@ def refresh_status(payment: MpesaPayment) -> MpesaPayment:
         payment.receipt_number = f"CHK{payment.pk:07d}"[:20]
         payment.save(update_fields=["receipt_number"])
     return payment
+
+
+# ----------------------------------------------------------------------------- C2B: confirm typed codes
+# Safaricom rejects C2B URLs that contain words like "mpesa", so these live under /api/payments/.
+C2B_CONFIRM_PATH = "/api/payments/c2b/confirm/"
+C2B_VALIDATE_PATH = "/api/payments/c2b/validate/"
+
+
+def code_check_enabled(business) -> bool:
+    """Typed codes are checked against real Safaricom payments once the business's number is connected."""
+    return bool(is_live() and business is not None and business.mpesa_shortcode)
+
+
+def _parse_time(value):
+    from datetime import datetime
+
+    try:
+        return timezone.make_aware(datetime.strptime(str(value), "%Y%m%d%H%M%S"))
+    except (TypeError, ValueError):
+        return None
+
+
+def handle_c2b_confirmation(data):
+    """Safaricom tells us a customer paid the paybill / till. Store it so the code can be confirmed at the till."""
+    from accounts.models import Business
+
+    from .models import MpesaTransaction
+
+    trans_id = str(data.get("TransID") or "").strip().upper()
+    if not trans_id:
+        return None
+    shortcode = str(data.get("BusinessShortCode") or "").strip()
+    business = Business.objects.filter(mpesa_shortcode=shortcode).first() if shortcode else None
+    name = " ".join(str(data.get(k) or "").strip() for k in ("FirstName", "MiddleName", "LastName")).strip()
+    tx, _ = MpesaTransaction.objects.get_or_create(trans_id=trans_id, defaults={
+        "business": business, "trans_type": str(data.get("TransactionType") or "")[:40],
+        "amount": Decimal(str(data.get("TransAmount") or "0")), "shortcode": shortcode[:12],
+        "bill_ref": str(data.get("BillRefNumber") or "")[:40], "msisdn": str(data.get("MSISDN") or "")[:80],
+        "payer_name": name[:120], "trans_time": _parse_time(data.get("TransTime")), "raw": data,
+    })
+    return tx
+
+
+def register_c2b_urls(business, base_url):
+    """Ask Safaricom to send this business's paybill / till payments to us (done once from Settings)."""
+    if not business.mpesa_shortcode:
+        raise StockError("Enter your paybill or till store number first.", "mpesa_shortcode")
+    if not is_live():
+        raise StockError("M-Pesa isn't connected on the server yet (MPESA_BACKEND=daraja and the Daraja keys).",
+                         "mpesa_not_configured")
+    token = CFG["CALLBACK_TOKEN"]
+    body = {"ShortCode": business.mpesa_shortcode, "ResponseType": "Completed",
+            "ConfirmationURL": f"{base_url}{C2B_CONFIRM_PATH}?token={token}",
+            "ValidationURL": f"{base_url}{C2B_VALIDATE_PATH}?token={token}"}
+    try:
+        r = requests.post(f"{_base()}/mpesa/c2b/v2/registerurl", json=body, timeout=30,
+                          headers={"Authorization": f"Bearer {_token()}"})
+        data = r.json() if r.content else {}
+    except (requests.RequestException, ValueError):
+        raise StockError("Couldn't reach Safaricom. Try again in a minute.", "mpesa_down")
+    ok = str(data.get("ResponseCode", "")) in ("0", "00000000") or "success" in str(data.get("ResponseDescription", "")).lower()
+    if not ok:
+        raise StockError(f"Safaricom refused: {data.get('errorMessage') or data.get('ResponseDescription') or r.status_code}",
+                         "mpesa_rejected")
+    business.mpesa_connected_at = timezone.now()
+    business.save(update_fields=["mpesa_connected_at"])
+    return data
+
+
+def claim_code(business, code, amount, sale=None, used_for=""):
+    """Use a real M-Pesa payment for a sale or credit repayment. Refuses unknown, short or already-used codes."""
+    from .models import MpesaTransaction
+
+    tx = MpesaTransaction.objects.select_for_update().filter(trans_id=code).first()
+    if tx is None:
+        raise StockError(
+            f"M-Pesa has not reported payment {code} to {business.mpesa_shortcode} yet. Check the code with the customer, "
+            "or wait a few seconds and try again.", "mpesa_not_found")
+    if tx.shortcode != business.mpesa_shortcode:
+        raise StockError(f"Payment {code} was made to another business number ({tx.shortcode}).", "mpesa_wrong_number")
+    if tx.sale_id or tx.used_for:
+        raise StockError(f"M-Pesa code {code} was already used{' on ' + tx.used_for if tx.used_for else ''}.", "mpesa_used")
+    if tx.amount < amount:
+        raise StockError(f"M-Pesa payment {code} is KES {tx.amount:,.0f}, but KES {amount:,.0f} is needed.", "mpesa_short")
+    tx.business_id = business.id
+    tx.sale = sale
+    tx.used_for = used_for[:30]
+    tx.save(update_fields=["business", "sale", "used_for"])
+    return tx

@@ -472,6 +472,11 @@ def post_sale(sale: Sale, user, mpesa_payment_id=None, deposit=None):
             used = (Sale.objects.filter(location__business_id=sale.location.business_id, payment_reference=code,
                                         status=Sale.Status.COMPLETED).exclude(pk=sale.pk).first())
             _require(used is None, f"M-Pesa code {code} was already used on {used.code if used else ''}.", "mpesa_used")
+            from . import mpesa
+
+            business = sale.location.business
+            if mpesa.code_check_enabled(business):
+                mpesa.claim_code(business, code, total, sale=sale, used_for=sale.code)  # must be a real payment
             sale.payment_reference = code
         sale.amount_paid = total
         paid_with = method
@@ -508,6 +513,15 @@ def record_sale_payment(sale: Sale, user, amount, method="cash", reference=""):
     reference = re.sub(r"\s+", "", reference or "").upper()
     if method == Sale.Payment.MPESA:
         _require(MPESA_CODE.match(reference), "Enter the 10-character M-Pesa code.", "mpesa_code")
+        from . import mpesa
+
+        business = sale.location.business
+        if mpesa.code_check_enabled(business):
+            mpesa.claim_code(business, reference, amount, sale=sale, used_for=f"{sale.code} payment")
+        else:
+            _require(not SalePayment.objects.filter(sale__location__business_id=business.id, reference=reference).exists()
+                     and not Sale.objects.filter(location__business_id=business.id, payment_reference=reference).exists(),
+                     f"M-Pesa code {reference} was already used.", "mpesa_used")
     sale.amount_paid += amount
     sale.save(update_fields=["amount_paid", "updated_at"])
     SalePayment.objects.create(sale=sale, amount=amount, method=method, reference=reference, received_by=user)

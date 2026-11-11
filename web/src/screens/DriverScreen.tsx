@@ -9,6 +9,23 @@ import { Card, ErrorView, LoadingList, Spinner } from '../ui/common';
 import { directionsLink } from '../ui/MapView';
 
 const SEND_EVERY_MS = 10000;
+const NEAR_M = 300;
+const memoryKey = (token: string) => `drive-sharing-${token}`;
+const remember = (token: string, on: boolean) => {
+  try {
+    if (on) localStorage.setItem(memoryKey(token), '1');
+    else localStorage.removeItem(memoryKey(token));
+  } catch {
+    // private mode
+  }
+};
+const remembered = (token: string) => {
+  try {
+    return localStorage.getItem(memoryKey(token)) === '1';
+  } catch {
+    return false;
+  }
+};
 
 /**
  * Opened by the driver from the link sent by SMS (no account needed). While it's open it sends the phone's
@@ -25,19 +42,67 @@ export function DriverScreen({ token }: { token: string }) {
   const wake = useRef<any>(null);
 
   const load = () =>
-    api.get<Json>(`/track/${token}/`).then(setTrip, (e) => setError(e));
+    api.get<Json>(`/track/${token}/`).then(
+      (t) => {
+        setTrip(t);
+        if (t.status !== 'in_transit') remember(token, false);
+      },
+      (e) => setError(e),
+    );
 
   useEffect(() => {
-    load();
-    return () => stop();
+    load().then(() => {
+      // Reopened the link (or the browser reloaded it): carry on sharing without asking again.
+      if (remembered(token)) start();
+    });
+    return () => stopWatch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  const stop = () => {
+  // Phones pause web pages in the background: when the driver comes back, send the position at once.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible' || watch.current == null) return;
+      lastPost.current = 0;
+      navigator.geolocation.getCurrentPosition((pos) => sendPosition(pos), () => {}, { enableHighAccuracy: true, timeout: 20000 });
+      (navigator as any).wakeLock?.request('screen').then((l: any) => (wake.current = l), () => {});
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const sendPosition = async (pos: GeolocationPosition) => {
+    lastPost.current = Date.now();
+    try {
+      const r = await api.post<Json>(`/track/${token}/`, {
+        lat: pos.coords.latitude.toFixed(6),
+        lng: pos.coords.longitude.toFixed(6),
+        accuracy: pos.coords.accuracy,
+        speed: pos.coords.speed,
+        heading: pos.coords.heading,
+      });
+      setTrip(r);
+      setLastSent(new Date());
+      setGpsError(null);
+    } catch (e: any) {
+      if (e?.status === 409) {
+        stop();
+        load();
+      }
+    }
+  };
+
+  const stopWatch = () => {
     if (watch.current != null) navigator.geolocation.clearWatch(watch.current);
     watch.current = null;
     wake.current?.release?.().catch(() => {});
     wake.current = null;
+  };
+
+  const stop = () => {
+    remember(token, false);
+    stopWatch();
     setSharing(false);
   };
 
@@ -52,29 +117,13 @@ export function DriverScreen({ token }: { token: string }) {
     } catch {
       // not supported: fine
     }
+    if (watch.current != null) return;
     setSharing(true);
+    remember(token, true);
     lastPost.current = 0;
     watch.current = navigator.geolocation.watchPosition(
-      async (pos) => {
-        const now = Date.now();
-        if (now - lastPost.current < SEND_EVERY_MS) return;
-        lastPost.current = now;
-        try {
-          const r = await api.post<Json>(`/track/${token}/`, {
-            lat: pos.coords.latitude.toFixed(6),
-            lng: pos.coords.longitude.toFixed(6),
-            accuracy: pos.coords.accuracy,
-            speed: pos.coords.speed,
-            heading: pos.coords.heading,
-          });
-          setTrip(r);
-          setLastSent(new Date());
-        } catch (e: any) {
-          if (e?.status === 409) {
-            stop();
-            load();
-          }
-        }
+      (pos) => {
+        if (Date.now() - lastPost.current >= SEND_EVERY_MS) sendPosition(pos);
       },
       (e) => setGpsError(e.code === 1 ? 'Location permission was refused. Allow location for this site, then tap Start again.' : 'Waiting for GPS signal…'),
       { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 },
@@ -99,6 +148,7 @@ export function DriverScreen({ token }: { token: string }) {
   const active = trip.status === 'in_transit';
   const km = trip.distance_left_m != null ? (trip.distance_left_m / 1000).toFixed(trip.distance_left_m < 10000 ? 1 : 0) : null;
   const dest = trip.destination;
+  const near = !!trip.arrived_near_at || (trip.distance_left_m != null && trip.distance_left_m <= NEAR_M) || !dest;
 
   return (
     <main className="page" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 16px)' }}>
@@ -127,7 +177,9 @@ export function DriverScreen({ token }: { token: string }) {
               <div className="col grow">
                 <span className="heavy" style={{ fontSize: 17 }}>{sharing ? 'Sharing your location' : 'Location not shared yet'}</span>
                 <span className="small muted">
-                  {sharing ? (lastSent ? `Last sent ${ago(lastSent)}. Keep this page open until you arrive.` : 'Getting GPS…') : `Tap Start so ${trip.to} can see you coming.`}
+                  {sharing
+                    ? lastSent ? `Last sent ${ago(lastSent)}. Keep this page open until you arrive.` : 'Getting GPS…'
+                    : `Tap Start so ${trip.to} can see you coming.`}
                 </span>
               </div>
             </div>
@@ -136,9 +188,21 @@ export function DriverScreen({ token }: { token: string }) {
                 <TriangleAlert size={18} /> {gpsError}
               </div>
             )}
-            <button className={`btn block ${sharing ? 'outline' : 'success'}`} style={{ marginTop: 14, minHeight: 58, fontSize: 17 }} onClick={sharing ? stop : start}>
-              {sharing ? 'Pause sharing' : <><Radio size={22} /> Start trip & share location</>}
-            </button>
+            {!sharing ? (
+              <button className="btn block success" style={{ marginTop: 14, minHeight: 58, fontSize: 17 }} onClick={start}>
+                <Radio size={22} /> Start trip & share location
+              </button>
+            ) : near ? (
+              <button className="btn block outline" style={{ marginTop: 14 }} onClick={stop}>
+                I've arrived: stop sharing
+              </button>
+            ) : null}
+            {sharing && (
+              <p className="tiny muted" style={{ margin: '10px 0 0' }}>
+                You can use other apps, but the phone may pause sharing until you come back to this page; it then carries on by
+                itself. For the best tracking, leave this page open on the screen.
+              </p>
+            )}
           </Card>
 
           {km != null && (

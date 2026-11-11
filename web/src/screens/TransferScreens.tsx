@@ -367,11 +367,11 @@ function SendLinkDialog({ d, close }: { d: Doc; close: () => void }) {
         The driver opens the link on their phone and taps <b>Start</b>, then you can watch the goods move to {d.destination_name}.
       </p>
       <div className="stack">
-        <a className="btn block" href={smsHref(phone, message)} onClick={() => window.setTimeout(close, 500)}>
+        <a className="btn block" href={smsHref(phone, message)}>
           <MessageSquareText size={20} /> Open SMS app
         </a>
         {phone && (
-          <a className="btn whatsapp block" href={`https://wa.me/${phone}?text=${encodeURIComponent(message)}`} target="_blank" rel="noreferrer" onClick={() => window.setTimeout(close, 500)}>
+          <a className="btn whatsapp block" href={`https://wa.me/${phone}?text=${encodeURIComponent(message)}`} target="_blank" rel="noreferrer">
             <MessageCircle size={20} /> Send by WhatsApp
           </a>
         )}

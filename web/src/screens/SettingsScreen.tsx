@@ -87,6 +87,8 @@ export function SettingsScreen() {
         </button>
       </Card>
 
+      {me.is_admin && <MpesaSection />}
+
       {me.is_admin && b && (
         <>
           <SectionTitle>Business</SectionTitle>
@@ -113,5 +115,63 @@ export function SettingsScreen() {
         </>
       )}
     </main>
+  );
+}
+
+interface MpesaStatus {
+  shortcode: string;
+  connected_at: string | null;
+  server_ready: boolean;
+  codes_checked: boolean;
+}
+
+/** Owner connects the paybill / till so codes typed at the till are confirmed against real Safaricom payments. */
+function MpesaSection() {
+  const overlay = useOverlay();
+  const status = useQuery({ queryKey: ['mpesa-connect'], queryFn: () => api.get<MpesaStatus>('/mpesa/connect/') });
+  const [number, setNumber] = useState('');
+  const [busy, setBusy] = useState(false);
+  const st = status.data;
+
+  useEffect(() => {
+    if (st && !number) setNumber(st.shortcode);
+  }, [st]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const connect = async () => {
+    setBusy(true);
+    try {
+      await api.post('/mpesa/connect/', { shortcode: number });
+      overlay.success('Connected. M-Pesa codes typed at the till are now confirmed with Safaricom.');
+    } catch (e) {
+      overlay.error(e);
+    } finally {
+      setBusy(false);
+      status.refetch();
+    }
+  };
+
+  return (
+    <>
+      <SectionTitle>M-Pesa</SectionTitle>
+      <Card className="stack">
+        <p className="small" style={{ margin: 0 }}>
+          Connect your paybill or till so every code a cashier types is checked against the payment Safaricom actually received:
+          the right amount, used only once.
+        </p>
+        <Field label="Paybill number, or till store number">
+          <input className="input" inputMode="numeric" placeholder="e.g. 522522" value={number} onChange={(e) => setNumber(e.target.value.replace(/D/g, ''))} />
+        </Field>
+        <div className="small bold" style={{ color: st?.codes_checked ? 'var(--success)' : 'var(--muted)' }}>
+          {st?.codes_checked
+            ? `Connected${st.connected_at ? ' on ' + new Date(st.connected_at).toLocaleDateString('en-GB') : ''}: codes are confirmed with Safaricom.`
+            : st && !st.server_ready
+              ? 'Waiting for the M-Pesa API keys on the server. Until then, check the amount on the customer’s message.'
+              : 'Not connected yet.'}
+        </div>
+        <button className="btn block" disabled={busy || number.length < 5 || !st?.server_ready} onClick={connect}>
+          {busy ? <Spinner /> : st?.codes_checked ? 'Reconnect' : 'Connect M-Pesa'}
+        </button>
+      </Card>
+    </>
   );
 }

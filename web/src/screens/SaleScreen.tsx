@@ -275,9 +275,11 @@ export function SaleScreen({ locationId }: { locationId: number | null }) {
                   value={mpesaCode}
                   onChange={(e) => setMpesaCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
                 />
-                <span className="tiny muted" style={{ display: 'block', marginTop: 6 }}>
-                  {mpesaCode.length === 10 ? 'Check the amount on the customer\'s message matches the total.' : `${mpesaCode.length}/10 characters. Each code can only be used once.`}
-                </span>
+                {mpesaCode.length === 10 ? (
+                  <CodeCheck code={mpesaCode} total={total} />
+                ) : (
+                  <span className="tiny muted" style={{ display: 'block', marginTop: 6 }}>{mpesaCode.length}/10 characters. Each code can only be used once.</span>
+                )}
               </Field>
             ) : (
               <StkPrompt
@@ -479,4 +481,36 @@ function CustomerSheet({ close }: { close: (c?: Customer | 'new') => void }) {
       </div>
     </Sheet>
   );
+}
+
+interface CodeInfo {
+  checked_with_safaricom: boolean;
+  found: boolean;
+  used_on: string | null;
+  amount?: string;
+  payer?: string;
+  paid_at?: string;
+}
+
+/** What Safaricom reported for a typed M-Pesa code: who paid, how much, and whether it was already used. */
+function CodeCheck({ code, total }: { code: string; total: number }) {
+  const info = useQuery({
+    queryKey: ['mpesa-code', code],
+    queryFn: () => api.get<CodeInfo>(`/mpesa/code/${code}/`),
+    refetchInterval: (q) => (q.state.data && q.state.data.checked_with_safaricom && !q.state.data.found ? 5000 : false),
+  }).data;
+  const line = (color: string, text: string, Icon = CircleCheck) => (
+    <span className="row small bold" style={{ marginTop: 8, gap: 6, color }}>
+      <Icon size={16} /> {text}
+    </span>
+  );
+  if (!info) return line('var(--muted)', 'Checking the code…', Loader);
+  if (info.used_on) return line(colors.danger, `Already used on ${info.used_on}.`, XCircle);
+  if (!info.checked_with_safaricom) {
+    return line(colors.amber, "Check the amount on the customer's M-Pesa message matches the total.", TriangleAlert);
+  }
+  if (!info.found) return line(colors.amber, 'Not received from Safaricom yet. Checking again every few seconds…', Loader);
+  const amount = toD(info.amount);
+  if (amount < Math.round(total)) return line(colors.danger, `Paid only ${money(amount)}; the sale is ${money(total)}.`, XCircle);
+  return line(colors.success, `Received ${money(amount)}${info.payer ? ` from ${info.payer}` : ''}${info.paid_at ? ` at ${new Date(info.paid_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` : ''}`);
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Check, ChevronsUpDown, Plus, Truck } from 'lucide-react';
+import { Check, ChevronsUpDown, PencilLine, Plus, Truck } from 'lucide-react';
 
 import { api } from '../lib/api';
 import { useMe } from '../lib/auth';
@@ -12,6 +12,7 @@ import { BottomActions, Card, Field, SectionTitle, Spinner, TopBar, useBack } fr
 import { LinesEditor, linesPayload } from '../ui/LinesEditor';
 import { useOverlay } from '../ui/overlay';
 import { LocationField, usePickLocation, usePickSupplier, usePickVariant } from '../ui/pickers';
+import { blankTyped, TypedProducts, typedPayload, typedProblem, typedTotal, type TypedProduct } from '../ui/TypedProducts';
 
 /**
  * Goods received from a supplier: who supplied them, which shop or godown they go into (chosen by the admin),
@@ -35,6 +36,7 @@ export function ReceiveScreen({ locationId }: { locationId: number | null }) {
   const [paid, setPaid] = useState('0');
   const [notes, setNotes] = useState('');
   const [lines, setLines] = useState<LineDraft[]>([]);
+  const [typed, setTyped] = useState<TypedProduct[]>([]);
   const [busy, setBusy] = useState(false);
 
   const usual = useQuery({
@@ -48,7 +50,8 @@ export function ReceiveScreen({ locationId }: { locationId: number | null }) {
     setLocation(mine.find((l) => l.id === locationId) ?? mine.find((l) => l.is_main) ?? mine[0] ?? null);
   }, [locations, location, locationId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const total = lines.reduce((s, l) => s + l.quantity * l.price, 0);
+  const total = lines.reduce((s, l) => s + l.quantity * l.price, 0) + typedTotal(typed);
+  const count = lines.filter((l) => l.quantity > 0).length + typed.length;
   const paidNum = toD(paid);
 
   const stockHere = async (variant: Variant) => {
@@ -76,7 +79,12 @@ export function ReceiveScreen({ locationId }: { locationId: number | null }) {
       overlay.error('Choose the supplier and where the goods go.');
       return;
     }
-    if (!lines.some((l) => l.quantity > 0)) {
+    const typedError = typedProblem(typed);
+    if (typedError) {
+      overlay.error(typedError);
+      return;
+    }
+    if (count === 0) {
       overlay.error('Add at least one product.');
       return;
     }
@@ -90,7 +98,7 @@ export function ReceiveScreen({ locationId }: { locationId: number | null }) {
     }
     setBusy(true);
     try {
-      const r = await api.post<Doc>('/receipts/', {
+      await api.post<Doc>('/receipts/', {
         client_uuid: clientUuid,
         location: location.id,
         supplier: supplier.id,
@@ -99,9 +107,10 @@ export function ReceiveScreen({ locationId }: { locationId: number | null }) {
         amount_paid: paidNum.toFixed(2),
         notes: notes.trim(),
         lines: linesPayload(lines, 'unit_cost'),
+        new_products: typedPayload(typed),
       });
       refresh();
-      overlay.success(`${r.code}: ${lines.length} item(s) added to ${location.name}`);
+      overlay.success(`${invoice.trim() ? `Invoice ${invoice.trim()}` : 'Delivery'}: ${count} item(s) added to ${location.name}${typed.length ? `. ${typed.length} new product(s) saved to your list.` : ''}`);
       back();
     } catch (e) {
       overlay.error(e);
@@ -146,7 +155,7 @@ export function ReceiveScreen({ locationId }: { locationId: number | null }) {
           <Field label="Date supplied">
             <input className="input" type="date" min="2020-01-01" max={apiDate(new Date())} value={date} onChange={(e) => setDate(e.target.value)} />
           </Field>
-          <Field label="Invoice / delivery no.">
+          <Field label="Supplier's invoice / delivery note no.">
             <input className="input" value={invoice} onChange={(e) => setInvoice(e.target.value)} />
           </Field>
         </div>
@@ -165,7 +174,13 @@ export function ReceiveScreen({ locationId }: { locationId: number | null }) {
           </div>
         </>
       )}
-      <LinesEditor lines={lines} onChange={setLines} onAdd={addLine} priceMode="cost" addLabel={supplier ? 'Find or add a product' : 'Add product'} />
+      <LinesEditor lines={lines} onChange={setLines} onAdd={addLine} priceMode="cost" addLabel="Pick from your products" />
+      <div style={{ marginTop: 10 }}>
+        <TypedProducts rows={typed} onChange={setTyped} />
+        <button className="btn tonal block" onClick={() => setTyped([...typed, blankTyped()])}>
+          <PencilLine size={20} /> Type a product that isn't listed
+        </button>
+      </div>
 
       <SectionTitle>Payment to supplier</SectionTitle>
       <Card>
@@ -189,7 +204,7 @@ export function ReceiveScreen({ locationId }: { locationId: number | null }) {
 
       <BottomActions>
         <button className="btn" disabled={busy || !supplier || !location} onClick={submit}>
-          {busy ? <Spinner /> : <Check size={20} />} Receive {lines.length} item{lines.length === 1 ? '' : 's'}
+          {busy ? <Spinner /> : <Check size={20} />} Receive {count} item{count === 1 ? '' : 's'}
           {location ? ` into ${location.name}` : ''}
         </button>
       </BottomActions>

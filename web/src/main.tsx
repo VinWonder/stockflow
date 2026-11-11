@@ -7,6 +7,7 @@ import { App } from './App';
 import { AuthProvider } from './lib/auth';
 import { applyThemeMode, getThemeMode } from './lib/theme';
 import { OverlayProvider } from './ui/overlay';
+import { PresetLists } from './lib/presets';
 import './styles.css';
 
 applyThemeMode(getThemeMode());
@@ -24,6 +25,7 @@ createRoot(document.getElementById('root')!).render(
         <AuthProvider>
           <OverlayProvider>
             <App />
+            <PresetLists />
           </OverlayProvider>
         </AuthProvider>
       </BrowserRouter>

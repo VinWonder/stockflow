@@ -1370,3 +1370,55 @@ button.plain {
 .tile:disabled:hover {
   background: transparent;
 }
+
+.notice {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 13.5px;
+}
+
+.action-choice {
+  justify-content: flex-start;
+  min-height: 52px;
+  padding: 10px 14px;
+  font-size: 14px;
+}
+
+.phone-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 18px;
+  background: var(--surface-2);
+}
+
+.sms-bubble {
+  max-width: 85%;
+  padding: 10px 14px;
+  border-radius: 18px;
+  font-size: 14.5px;
+  white-space: pre-line;
+  word-break: break-word;
+}
+
+.sms-bubble.out {
+  align-self: flex-end;
+  background: var(--info);
+  color: #fff;
+  border-bottom-right-radius: 6px;
+}
+
+.sms-bubble.in {
+  align-self: flex-start;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 6px;
+}
+
+.sms-bubble.in.bad {
+  border-color: var(--danger);
+}

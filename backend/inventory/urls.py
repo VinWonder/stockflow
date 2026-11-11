@@ -25,4 +25,9 @@ urlpatterns = [
     path("config/", views.app_config, name="app-config"),
     path("track/<str:token>/", views.driver_tracking, name="driver-tracking"),
     path("mpesa/callback/", views.mpesa_callback, name="mpesa-callback"),
+    path("payments/stk-callback/", views.mpesa_callback, name="stk-callback"),
+    path("payments/c2b/confirm/", views.c2b_confirm, name="c2b-confirm"),
+    path("payments/c2b/validate/", views.c2b_validate, name="c2b-validate"),
+    path("mpesa/code/<str:code>/", views.mpesa_code_check, name="mpesa-code-check"),
+    path("mpesa/connect/", views.mpesa_connect, name="mpesa-connect"),
 ] + router.urls

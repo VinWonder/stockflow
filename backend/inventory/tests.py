@@ -301,16 +301,23 @@ class AccountTests(TestCase):
         self.api = APIClient()
 
     def register(self, email="owner@shop.co.ke", phone="0733000111", **extra):
+        sent = self.api.post("/api/auth/register/code/", {"email": email}, format="json")
+        code = mail.outbox[-1].subject.split()[-1] if sent.status_code == 200 else "000000"
         return self.api.post("/api/auth/register/", {
+            "email_code": code,
             "business_name": "Kamau Hardware", "full_name": "Peter Kamau", "email": email, "phone": phone,
             "password": "Strong-pass-2026", "main_shop": {"name": "Kamau Main Shop", "address": "Thika Rd"},
             "stores": [{"name": "Ruiru Godown", "kind": "godown"}, {"name": "Juja Shop", "kind": "shop"}], **extra,
         }, format="json")
 
     def test_sign_up_creates_business_main_shop_and_stores(self):
+        bad = self.api.post("/api/auth/register/", {"email": "x@y.co", "email_code": "123456", "business_name": "X",
+                                                    "full_name": "X", "phone": "0733000999", "password": "Strong-pass-2026",
+                                                    "main_shop": {"name": "X"}}, format="json")
+        self.assertEqual(bad.status_code, 400)  # no code was sent to that email
         r = self.register()
         self.assertEqual(r.status_code, 201, r.data)
-        self.assertIn("access", r.data)
+        self.assertNotIn("access", r.data)  # the owner signs in after creating the account
         user = User.objects.get(email="owner@shop.co.ke")
         self.assertTrue(user.is_admin)
         stores = Location.objects.filter(business=user.business)
@@ -350,8 +357,8 @@ class AccountTests(TestCase):
         self.register()
         r = self.api.post("/api/auth/password/forgot/", {"email": "owner@shop.co.ke"}, format="json")
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(len(mail.outbox), 1)
-        code = mail.outbox[0].subject.split()[-1]
+        self.assertEqual(len(mail.outbox), 2)  # sign-up code, then reset code
+        code = mail.outbox[-1].subject.split()[-1]
         self.assertEqual(len(code), 6)
         bad = self.api.post("/api/auth/password/reset/", {"email": "owner@shop.co.ke", "code": "000000" if code != "000000" else "111111",
                                                           "new_password": "Another-pass-77"}, format="json")
@@ -367,7 +374,7 @@ class AccountTests(TestCase):
         # Unknown emails get the same answer and no email.
         r = self.api.post("/api/auth/password/forgot/", {"email": "nobody@x.com"}, format="json")
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(len(mail.outbox), 2)
 
     def test_owner_adds_staff_in_app(self):
         self.register()
@@ -424,3 +431,85 @@ class ScreenEndpointTests(TestCase):
                 self.assertEqual(api.get(url).status_code, 200, url)
         self.assertEqual(api.get("/api/users/").status_code, 403)
         self.assertEqual(api.get("/api/messaging/log/").status_code, 403)
+
+
+class NewFeatureTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        call_command("seed_demo", verbosity=0)
+
+    def setUp(self):
+        self.admin = User.objects.get(username="admin")
+        self.main = Location.objects.get(code="MAIN")
+        self.gdn = Location.objects.get(code="GDN")
+        self.cement = Variant.objects.get(sku="CEM-50KG")
+        self.api = APIClient()
+        self.api.force_authenticate(self.admin)
+
+    def test_products_typed_during_delivery_join_the_catalogue(self):
+        sup = Supplier.objects.first()
+        body = {"location": self.gdn.id, "supplier": sup.id, "supplied_on": str(date.today()), "invoice_number": "INV-889",
+                "new_products": [{"name": "Gate valve", "size": '1/2"', "unit": "pcs", "category": "Taps",
+                                  "quantity": "10", "unit_cost": "400", "selling_price": "650"}]}
+        r = self.api.post("/api/receipts/", body, format="json")
+        self.assertEqual(r.status_code, 201, r.data)
+        v = Variant.objects.get(product__name="Gate valve", size='1/2"')
+        self.assertEqual(qty(self.gdn, v), D(10))
+        self.assertEqual(v.product.category.name, "Taps")
+        self.assertIn(sup, v.product.suppliers.all())
+        # Typed again later: the same catalogue item is reused, not duplicated.
+        body["client_uuid"] = None
+        body["new_products"][0]["name"] = "gate VALVE"
+        self.assertEqual(self.api.post("/api/receipts/", body, format="json").status_code, 201)
+        self.assertEqual(Variant.objects.filter(product__name__iexact="gate valve").count(), 1)
+        self.assertEqual(qty(self.gdn, v), D(20))
+
+    def test_typed_category_on_product(self):
+        r = self.api.post("/api/products/", {"name": "Water tank", "new_category": "Tanks",
+                                             "new_variants": [{"size": "1000L"}, {"size": "5000L"}]}, format="json")
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertEqual(r.data["category_name"], "Tanks")
+
+    def test_each_business_numbers_from_one(self):
+        other = Business.objects.create(name="Second Shop")
+        loc = Location.objects.create(business=other, code="MAIN", name="Main")
+        from inventory.models import Sale as SaleModel
+
+        first = SaleModel.objects.create(location=loc)
+        self.assertEqual(first.code, "SAL00001")
+
+    def test_typed_mpesa_code_must_be_a_real_safaricom_payment(self):
+        from django.test import override_settings
+        from inventory import mpesa
+
+        biz = self.admin.business
+        biz.mpesa_shortcode = "600999"
+        biz.save()
+        body = {"location": self.main.id, "payment_method": "mpesa", "lines": [{"variant": self.cement.id, "quantity": "1"}]}
+        with override_settings(), self.settings():
+            mpesa.CFG["BACKEND"] = "daraja"
+            try:
+                r = self.api.post("/api/sales/", {**body, "payment_reference": "SKL4ABCD12"}, format="json")
+                self.assertEqual(r.status_code, 409)
+                self.assertEqual(r.data["code"], "mpesa_not_found")
+                # Safaricom reports the payment to our confirmation URL.
+                token = mpesa.CFG["CALLBACK_TOKEN"]
+                anon = APIClient()
+                ok = anon.post(f"/api/payments/c2b/confirm/?token={token}", {
+                    "TransactionType": "Buy Goods", "TransID": "SKL4ABCD12", "TransTime": "20261111093000",
+                    "TransAmount": "850.00", "BusinessShortCode": "600999", "FirstName": "JANE"}, format="json")
+                self.assertEqual(ok.status_code, 200)
+                self.assertEqual(anon.post("/api/payments/c2b/confirm/?token=wrong", {}, format="json").status_code, 403)
+                check = self.api.get("/api/mpesa/code/skl4abcd12/").data
+                self.assertTrue(check["found"])
+                self.assertEqual(check["payer"], "JANE")
+                r = self.api.post("/api/sales/", {**body, "payment_reference": "SKL4ABCD12"}, format="json")
+                self.assertEqual(r.status_code, 201, r.data)
+                r = self.api.post("/api/sales/", {**body, "payment_reference": "SKL4ABCD12"}, format="json")
+                self.assertEqual(r.status_code, 409)  # already used
+                short = {**body, "lines": [{"variant": self.cement.id, "quantity": "2"}], "payment_reference": "SKL4ABCD99"}
+                anon.post(f"/api/payments/c2b/confirm/?token={token}", {"TransID": "SKL4ABCD99", "TransAmount": "850",
+                                                                       "BusinessShortCode": "600999"}, format="json")
+                self.assertEqual(self.api.post("/api/sales/", short, format="json").data["code"], "mpesa_short")
+            finally:
+                mpesa.CFG["BACKEND"] = "console"

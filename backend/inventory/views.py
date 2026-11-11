@@ -369,9 +369,13 @@ def _driver_data(data):
     return {k: data.get(k) for k in ("driver_name", "driver_phone", "vehicle_type", "vehicle_reg")}
 
 
-def tracking_link(request, transfer):
+def public_url(request, path=""):
     base = settings.PUBLIC_APP_URL or request.build_absolute_uri("/").rstrip("/")
-    return f"{base}/drive/{transfer.tracking_token}"
+    return f"{base}{path}"
+
+
+def tracking_link(request, transfer):
+    return public_url(request, f"/drive/{transfer.tracking_token}")
 
 
 class TransferViewSet(DocumentViewSet):
@@ -575,7 +579,7 @@ class MpesaViewSet(viewsets.GenericViewSet):
         loc = Location.objects.filter(pk=_int(request.data.get("location")), business_id=request.user.business_id).first()
         if not loc or not request.user.can_access(loc):
             raise PermissionDenied("Choose one of your stores.")
-        callback = request.build_absolute_uri(f"/api/mpesa/callback/?token={settings.MPESA['CALLBACK_TOKEN']}")
+        callback = public_url(request, f"/api/payments/stk-callback/?token={settings.MPESA['CALLBACK_TOKEN']}")
         payment = mpesa.start_stk_push(business=request.user.business, location=loc, user=request.user,
                                        phone=request.data.get("phone", ""), amount=request.data.get("amount", 0),
                                        reference=request.data.get("reference") or loc.code, callback_url=callback)
@@ -631,6 +635,68 @@ class StockCountViewSet(ScopedMixin, viewsets.ReadOnlyModelViewSet):
         return Response(self.get_serializer(services.post_count(self.get_object(), request.user)).data)
 
     _payload = DocumentViewSet._payload
+
+
+def _token_ok(request):
+    import hmac
+
+    return hmac.compare_digest(request.query_params.get("token", ""), settings.MPESA["CALLBACK_TOKEN"])
+
+
+@api_view(["POST"])
+@permission_classes([permissions.AllowAny])
+def c2b_validate(request):
+    """Safaricom asks before accepting a payment to the paybill / till: we accept everything."""
+    if not _token_ok(request):
+        return Response({"ResultCode": "C2B00016", "ResultDesc": "Rejected"}, status=403)
+    return Response({"ResultCode": "0", "ResultDesc": "Accepted"})
+
+
+@api_view(["POST"])
+@permission_classes([permissions.AllowAny])
+def c2b_confirm(request):
+    """Safaricom reports a completed payment to the paybill / till; it can then be confirmed at the till."""
+    if not _token_ok(request):
+        return Response({"ResultCode": 1, "ResultDesc": "Rejected"}, status=403)
+    mpesa.handle_c2b_confirmation(request.data)
+    return Response({"ResultCode": 0, "ResultDesc": "Accepted"})
+
+
+@api_view(["GET"])
+def mpesa_code_check(request, code):
+    """Look up a customer's M-Pesa code before completing a sale: amount, payer and whether it's already used."""
+    from .models import MpesaTransaction
+
+    code = "".join(code.split()).upper()
+    business = request.user.business
+    enabled = mpesa.code_check_enabled(business)
+    used_sale = (Sale.objects.filter(location__business_id=request.user.business_id, payment_reference=code,
+                                     status="completed").values_list("code", flat=True).first())
+    out = {"code": code, "checked_with_safaricom": enabled, "found": False, "used_on": used_sale}
+    if enabled:
+        tx = MpesaTransaction.objects.filter(trans_id=code, shortcode=business.mpesa_shortcode).first()
+        if tx:
+            out.update(found=True, amount=str(tx.amount), payer=tx.payer_name, paid_at=tx.trans_time,
+                       used_on=tx.used_for or used_sale)
+    return Response(out)
+
+
+@api_view(["GET", "POST"])
+def mpesa_connect(request):
+    """Owner: save the paybill / till number and ask Safaricom to report its payments to StockFlow."""
+    business = request.user.business
+    if request.method == "POST":
+        if not request.user.is_admin:
+            raise PermissionDenied("Only the owner can connect M-Pesa.")
+        number = "".join(ch for ch in str(request.data.get("shortcode", "")) if ch.isdigit())
+        if not 5 <= len(number) <= 7:
+            raise ValidationError({"shortcode": "Enter your paybill or till store number (5 to 7 digits)."})
+        business.mpesa_shortcode = number
+        business.mpesa_connected_at = None
+        business.save(update_fields=["mpesa_shortcode", "mpesa_connected_at"])
+        mpesa.register_c2b_urls(business, public_url(request))
+    return Response({"shortcode": business.mpesa_shortcode, "connected_at": business.mpesa_connected_at,
+                     "server_ready": mpesa.is_live(), "codes_checked": mpesa.code_check_enabled(business)})
 
 
 # ----------------------------------------------------------------------------- app config

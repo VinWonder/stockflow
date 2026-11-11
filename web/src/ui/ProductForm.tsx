@@ -5,6 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { money, numericInput, qtyOut, toD } from '../lib/format';
 import type { Product, Supplier, Variant } from '../lib/models';
+import { CATEGORY_PRESETS } from '../lib/presets';
 import { useCategories, useSuppliers } from '../lib/queries';
 import { Field, Spinner, Switch } from './common';
 import { Sheet, useOverlay } from './overlay';
@@ -36,8 +37,7 @@ export function ProductSheet({ product, supplier, close }: { product?: Product; 
   const [name, setName] = useState(product?.name ?? '');
   const [code, setCode] = useState(product?.code ?? '');
   const [brand, setBrand] = useState(product?.brand ?? '');
-  const [category, setCategory] = useState<string>(product?.category ? String(product.category) : '');
-  const [newCategory, setNewCategory] = useState('');
+  const [category, setCategory] = useState(product?.category_name ?? '');
   const [unit, setUnit] = useState(product?.unit ?? 'pcs');
   const [fractions, setFractions] = useState(product?.allow_fractions ?? false);
   const [reorder, setReorder] = useState(product ? qtyOut(toD(product.reorder_level)) : '5');
@@ -63,17 +63,11 @@ export function ProductSheet({ product, supplier, close }: { product?: Product; 
     }
     setBusy(true);
     try {
-      let categoryId: number | null = category ? Number(category) : null;
-      if (category === 'new' && newCategory.trim()) {
-        const c = await api.post<{ id: number }>('/categories/', { name: newCategory.trim() });
-        categoryId = c.id;
-        qc.invalidateQueries({ queryKey: ['categories'] });
-      }
       const body = {
         name: name.trim(),
         code: code.trim().toUpperCase(),
         brand: brand.trim(),
-        category: categoryId,
+        ...(category.trim() ? { new_category: category.trim() } : { category: null }),
         unit,
         allow_fractions: fractions,
         reorder_level: reorder || '0',
@@ -92,6 +86,7 @@ export function ProductSheet({ product, supplier, close }: { product?: Product; 
       }
       if (product) saved = await api.get<Product>(`/products/${product.id}/`);
       qc.invalidateQueries({ queryKey: ['products'] });
+      qc.invalidateQueries({ queryKey: ['categories'] });
       overlay.success(product ? `${saved.name} saved` : `${saved.name} added to your catalogue`);
       close(saved);
     } catch (e) {
@@ -129,14 +124,11 @@ export function ProductSheet({ product, supplier, close }: { product?: Product; 
           </Field>
         </div>
         <div className="grid-2">
-          <Field label="Category">
-            <select className="input" value={category} onChange={(e) => setCategory(e.target.value)}>
-              <option value="">None</option>
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-              <option value="new">+ New category…</option>
-            </select>
+          <Field label="Category (pick or type)">
+            <input className="input" list="product-categories" autoCapitalize="words" placeholder="e.g. Taps, Tanks" value={category} onChange={(e) => setCategory(e.target.value)} />
+            <datalist id="product-categories">
+              {[...new Set([...categories.map((c) => c.name), ...CATEGORY_PRESETS])].map((c) => <option key={c} value={c} />)}
+            </datalist>
           </Field>
           <Field label="Sold in">
             <select className="input" value={unit} onChange={(e) => {
@@ -149,11 +141,6 @@ export function ProductSheet({ product, supplier, close }: { product?: Product; 
             </select>
           </Field>
         </div>
-        {category === 'new' && (
-          <Field label="New category name">
-            <input className="input" autoCapitalize="words" value={newCategory} onChange={(e) => setNewCategory(e.target.value)} />
-          </Field>
-        )}
         <div className="grid-2">
           <Field label="Warn me when stock falls to">
             <input className="input" inputMode="decimal" value={reorder} onChange={(e) => setReorder(numericInput(e.target.value))} />
@@ -168,8 +155,8 @@ export function ProductSheet({ product, supplier, close }: { product?: Product; 
         {rows.map((r, i) => (
           <div key={r.id ?? `n${i}`} className="card" style={{ padding: 12 }}>
             <div className="grid-2">
-              <input className="input" placeholder="Size (e.g. 4L, 1in, Gauge 30)" value={r.size} onChange={(e) => setRow(i, { size: e.target.value })} />
-              <input className="input" placeholder="Colour (optional)" autoCapitalize="words" value={r.colour} onChange={(e) => setRow(i, { colour: e.target.value })} />
+              <input className="input" list="preset-sizes" placeholder='Size: pick or type, e.g. 1/2"' value={r.size} onChange={(e) => setRow(i, { size: e.target.value })} />
+              <input className="input" list="preset-colours" placeholder="Colour (optional)" autoCapitalize="words" value={r.colour} onChange={(e) => setRow(i, { colour: e.target.value })} />
             </div>
             <div className="row" style={{ marginTop: 8, gap: 8 }}>
               <Field label="Selling price" style={{ flex: 1 }}>

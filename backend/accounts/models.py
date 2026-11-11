@@ -29,6 +29,10 @@ class Business(models.Model):
     email = models.EmailField(blank=True)
     address = models.CharField(max_length=200, blank=True)
     kra_pin = models.CharField("KRA PIN", max_length=20, blank=True)
+    mpesa_shortcode = models.CharField(
+        "M-Pesa paybill / till store number", max_length=12, blank=True, db_index=True,
+        help_text="Payments Safaricom reports for this number are used to confirm M-Pesa codes typed at the till")
+    mpesa_connected_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -108,6 +112,47 @@ class PasswordResetCode(models.Model):
         code = f"{secrets.randbelow(1_000_000):06d}"
         cls.objects.create(user=user, code_hash=make_password(code))
         return code
+
+    @property
+    def expired(self):
+        return timezone.now() - self.created_at > self.LIFETIME
+
+    def matches(self, code) -> bool:
+        if self.used or self.expired or self.attempts >= self.MAX_ATTEMPTS:
+            return False
+        if check_password((code or "").strip(), self.code_hash):
+            return True
+        self.attempts += 1
+        self.save(update_fields=["attempts"])
+        return False
+
+
+class SignupCode(models.Model):
+    """6-digit code emailed to confirm the owner's email before the account is created."""
+
+    LIFETIME = timedelta(minutes=15)
+    MAX_ATTEMPTS = 5
+
+    email = models.EmailField(db_index=True)
+    code_hash = models.CharField(max_length=128)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    used = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    @classmethod
+    def issue(cls, email):
+        email = email.strip().lower()
+        cls.objects.filter(email=email, used=False).update(used=True)
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        cls.objects.create(email=email, code_hash=make_password(code))
+        return code
+
+    @classmethod
+    def latest(cls, email):
+        return cls.objects.filter(email=(email or "").strip().lower(), used=False).first()
 
     @property
     def expired(self):

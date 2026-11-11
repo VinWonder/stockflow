@@ -79,6 +79,25 @@ def suggest_code(name, taken):
     return code
 
 
+def auto_product_code(business_id, name):
+    words = [w for w in "".join(c if c.isalnum() else " " for c in (name or "")).upper().split() if w]
+    base = (words[0][:4] if words else "ITEM") or "ITEM"
+    code, n = base, 2
+    while Product.objects.filter(business_id=business_id, code=code).exists():
+        code = f"{base}{n}"
+        n += 1
+    return code
+
+
+def category_named(business_id, name):
+    """Find a category by name (any capitals) or create it: owners type their own, e.g. Taps, Tanks."""
+    name = " ".join((name or "").split())
+    if not name:
+        return None
+    found = Category.objects.filter(business_id=business_id, name__iexact=name).first()
+    return found or Category.objects.create(business_id=business_id, name=name[:80])
+
+
 class CategorySerializer(serializers.ModelSerializer):
     product_count = serializers.IntegerField(read_only=True, required=False)
 
@@ -134,12 +153,14 @@ class ProductSerializer(SameBusinessMixin, serializers.ModelSerializer):
     category_name = serializers.CharField(source="category.name", read_only=True, default="")
     total_stock = serializers.DecimalField(max_digits=14, decimal_places=3, read_only=True, required=False)
     supplier_names = serializers.SerializerMethodField()
+    new_category = serializers.CharField(write_only=True, required=False, allow_blank=True, max_length=80,
+                                         help_text="Category typed by the user; created if it doesn't exist yet")
 
     class Meta:
         model = Product
-        fields = ["id", "name", "code", "category", "category_name", "brand", "unit", "allow_fractions", "description",
-                  "image", "reorder_level", "suppliers", "supplier_names", "is_active", "variants", "new_variants",
-                  "total_stock"]
+        fields = ["id", "name", "code", "category", "category_name", "new_category", "brand", "unit", "allow_fractions",
+                  "description", "image", "reorder_level", "suppliers", "supplier_names", "is_active", "variants",
+                  "new_variants", "total_stock"]
         extra_kwargs = {"suppliers": {"required": False}}
 
     def get_supplier_names(self, obj):
@@ -154,12 +175,7 @@ class ProductSerializer(SameBusinessMixin, serializers.ModelSerializer):
         code = (data.get("code") or "").upper().strip()
         name = data.get("name", getattr(self.instance, "name", ""))
         if not code and not self.instance:
-            words = [w for w in "".join(c if c.isalnum() else " " for c in name).upper().split() if w]
-            code = (words[0][:4] if words else "ITEM")
-            base, n = code, 2
-            while Product.objects.filter(business_id=biz, code=code).exists():
-                code = f"{base}{n}"
-                n += 1
+            code = auto_product_code(biz, name)
         if code:
             clash = Product.objects.filter(business_id=biz, code=code).exclude(pk=getattr(self.instance, "pk", None))
             if clash.exists():
@@ -167,6 +183,9 @@ class ProductSerializer(SameBusinessMixin, serializers.ModelSerializer):
             data["code"] = code
         if data.get("reorder_level") is not None and data["reorder_level"] < 0:
             raise serializers.ValidationError({"reorder_level": "Can't be negative."})
+        typed = data.pop("new_category", None)
+        if typed and typed.strip():
+            data["category"] = category_named(biz, typed)
         return data
 
     @transaction.atomic
@@ -329,8 +348,23 @@ class ReceiptLineSerializer(DocLineSerializer):
         fields = ["id", "variant", "variant_label", "sku", "unit", "quantity", "unit_cost"]
 
 
+class TypedProductLine(serializers.Serializer):
+    """A product typed in while receiving a delivery. Saved to the catalogue so it can be picked next time."""
+
+    name = serializers.CharField(max_length=150)
+    size = serializers.CharField(max_length=40, required=False, allow_blank=True, default="")
+    colour = serializers.CharField(max_length=40, required=False, allow_blank=True, default="")
+    unit = serializers.ChoiceField(choices=Product.Unit.choices, default=Product.Unit.PCS)
+    category = serializers.CharField(max_length=80, required=False, allow_blank=True, default="")
+    quantity = serializers.DecimalField(max_digits=12, decimal_places=3, min_value=Decimal("0.001"))
+    unit_cost = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal("0"))
+    selling_price = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal("0"), required=False,
+                                             default=Decimal("0"))
+
+
 class ReceiptSerializer(SameBusinessMixin, LineMixin, serializers.ModelSerializer):
-    lines = ReceiptLineSerializer(many=True)
+    lines = ReceiptLineSerializer(many=True, required=False)
+    new_products = TypedProductLine(many=True, required=False, write_only=True)
     supplier_name = serializers.CharField(source="supplier.name", read_only=True)
     location_name = serializers.CharField(source="location.name", read_only=True)
     total_amount = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
@@ -343,8 +377,21 @@ class ReceiptSerializer(SameBusinessMixin, LineMixin, serializers.ModelSerialize
         model = Receipt
         fields = ["id", "code", "client_uuid", "location", "location_name", "supplier", "supplier_name", "supplied_on",
                   "invoice_number", "status", "amount_paid", "total_amount", "balance_due", "payment_status", "notes",
-                  "lines", "created_by_name", "created_at", "posted_at", "post_now"]
+                  "lines", "new_products", "created_by_name", "created_at", "posted_at", "post_now"]
         read_only_fields = ["code", "status", "posted_at"]
+
+    def validate_lines(self, lines):
+        return super().validate_lines(lines) if lines else lines
+
+    def validate(self, data):
+        data = super().validate(data)
+        if not data.get("lines") and not data.get("new_products"):
+            raise serializers.ValidationError("Add at least one product.")
+        keys = [(p["name"].strip().lower(), p["size"].strip().lower(), p["colour"].strip().lower())
+                for p in data.get("new_products", [])]
+        if len(set(keys)) != len(keys):
+            raise serializers.ValidationError("The same new product is typed twice. Combine the quantities.")
+        return data
 
     def get_created_by_name(self, obj):
         return _person(obj.created_by)
@@ -355,11 +402,53 @@ class ReceiptSerializer(SameBusinessMixin, LineMixin, serializers.ModelSerialize
         return v
 
     def create(self, data):
-        lines = data.pop("lines")
+        lines = list(data.pop("lines", []))
+        typed = data.pop("new_products", [])
         data.pop("post_now", None)
+        biz = data["location"].business_id
+        taken = {l["variant"].id for l in lines}
+        for p in typed:
+            variant = self._catalogue_variant(biz, p)
+            if variant.id in taken:
+                raise serializers.ValidationError(f"{variant.label} is listed twice. Combine the quantities.")
+            taken.add(variant.id)
+            lines.append({"variant": variant, "quantity": p["quantity"], "unit_cost": p["unit_cost"]})
         receipt = Receipt.objects.create(**data)
         ReceiptLine.objects.bulk_create([ReceiptLine(receipt=receipt, **l) for l in lines])
         return receipt
+
+    @staticmethod
+    def _catalogue_variant(biz, p):
+        """Find the typed product (same name, size and colour) or add it to the catalogue."""
+        name = " ".join(p["name"].split())
+        size, colour = p["size"].strip(), p["colour"].strip()
+        product = Product.objects.filter(business_id=biz, name__iexact=name).first()
+        if product is None:
+            product = Product.objects.create(
+                business_id=biz, name=name, code=auto_product_code(biz, name), unit=p["unit"],
+                allow_fractions=p["unit"] in ("kg", "m", "ft", "l"), category=category_named(biz, p["category"]))
+        elif p["category"] and product.category_id is None:
+            product.category = category_named(biz, p["category"])
+            product.save(update_fields=["category", "updated_at"])
+        if not product.is_active:
+            product.is_active = True
+            product.save(update_fields=["is_active", "updated_at"])
+        variant = product.variants.filter(size__iexact=size, colour__iexact=colour).first()
+        if variant is None:
+            variant = Variant.objects.create(product=product, size=size, colour=colour, selling_price=p["selling_price"])
+        else:
+            changed = []
+            if p["selling_price"] and p["selling_price"] != variant.selling_price:
+                variant.selling_price = p["selling_price"]
+                changed.append("selling_price")
+            if not variant.is_active:
+                variant.is_active = True
+                changed.append("is_active")
+            if changed:
+                variant.save(update_fields=changed + ["updated_at"])
+        if not product.allow_fractions and p["quantity"] != p["quantity"].to_integral_value():
+            raise serializers.ValidationError(f"{variant.label} is counted in whole {product.unit}.")
+        return variant
 
 
 class TransferLineSerializer(DocLineSerializer):
