@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { HandCoins, MessageCircle, Pencil, Phone, Search, Users } from 'lucide-react';
+import { HandCoins, MessageCircle, MessageSquareText, Pencil, Phone, Search, Users } from 'lucide-react';
 
 import { api } from '../lib/api';
 import { useMe } from '../lib/auth';
-import { dateOnly, money, numericInput, qty, toD } from '../lib/format';
+import { dateOnly, money, numericInput, qty, smsHref, toD } from '../lib/format';
 import type { Customer, Sale } from '../lib/models';
 import { useCustomers, useCustomerStatement, useRefreshEverything } from '../lib/queries';
 import { colors } from '../lib/theme';
@@ -164,6 +164,8 @@ export function CustomerScreen({ id }: { id: number }) {
   if (data.isError) return <main className="page"><TopBar title="Customer" back /><ErrorView error={data.error} onRetry={() => data.refetch()} /></main>;
   const { customer: c, sales } = data.data;
   const open = sales.filter((s) => s.status === 'completed' && toD(s.balance) > 0);
+  const remind = (cust: Customer, unpaid: Sale[]) =>
+    overlay.open((close) => <ReminderDialog customer={cust} unpaid={unpaid} close={close} />);
   const closed = sales.filter((s) => !open.includes(s));
   const today = new Date().toISOString().slice(0, 10);
 
@@ -180,15 +182,11 @@ export function CustomerScreen({ id }: { id: number }) {
           {c.phone && (
             <>
               <a className="icon-btn tonal" href={`tel:+${c.phone}`} aria-label="Call"><Phone size={20} /></a>
-              <a
-                className="icon-btn tonal"
-                target="_blank"
-                rel="noreferrer"
-                aria-label="WhatsApp reminder"
-                href={`https://wa.me/${c.phone}?text=${encodeURIComponent(`Hello ${c.name}, a friendly reminder: your balance with ${me.business?.name ?? 'us'} is ${money(c.owed)}. Thank you.`)}`}
-              >
-                <MessageCircle size={20} />
-              </a>
+              {toD(c.owed) > 0 && (
+                <button className="icon-btn tonal" aria-label="Send payment reminder" title="Send payment reminder" onClick={() => remind(c, open)}>
+                  <MessageCircle size={20} />
+                </button>
+              )}
             </>
           )}
         </div>
@@ -242,5 +240,41 @@ function SaleCard({ s, overdue, onPay, busy }: { s: Sale; overdue?: boolean; onP
         </button>
       )}
     </Card>
+  );
+}
+
+/** Payment reminder for a customer who owes money: shown first so it can be edited, then sent by SMS or WhatsApp. */
+function ReminderDialog({ customer, unpaid, close }: { customer: Customer; unpaid: Sale[]; close: () => void }) {
+  const me = useMe();
+  const biz = me.business;
+  const today = new Date().toISOString().slice(0, 10);
+  const lines = unpaid.slice(0, 5).map((s) => {
+    const due = s.due_date ? (s.due_date < today ? `was due ${dateOnly(s.due_date)}` : `due ${dateOnly(s.due_date)}`) : '';
+    return `- ${dateOnly(s.created_at)} (${s.code}): ${money(s.balance)}${due ? `, ${due}` : ''}`;
+  });
+  const how = biz?.mpesa_shortcode ? `Pay by M-Pesa to ${biz.mpesa_shortcode} or at our shop.` : 'You can pay at our shop or by M-Pesa.';
+  const [text, setText] = useState(
+    [
+      `Hello ${customer.name.split(' ')[0]}, this is ${biz?.name ?? 'your hardware shop'}.`,
+      `Your account balance is ${money(customer.owed)}${toD(customer.overdue) > 0 ? `, of which ${money(customer.overdue)} is overdue` : ''}:`,
+      ...lines,
+      how,
+      `Thank you for buying with us.${biz?.phone ? ` Questions: ${biz.phone}` : ''}`,
+    ].join('\n'),
+  );
+  const phone = customer.phone;
+  return (
+    <Dialog onClose={close} title={`Remind ${customer.name}`} actions={<button className="btn text" onClick={close}>Close</button>}>
+      <textarea className="input" rows={9} value={text} onChange={(e) => setText(e.target.value)} />
+      <div className="row" style={{ marginTop: 12, gap: 8 }}>
+        <a className="btn grow" href={smsHref(phone, text)}>
+          <MessageSquareText size={20} /> SMS
+        </a>
+        <a className="btn whatsapp grow" href={`https://wa.me/${phone}?text=${encodeURIComponent(text)}`} target="_blank" rel="noreferrer">
+          <MessageCircle size={20} /> WhatsApp
+        </a>
+      </div>
+      <p className="tiny muted" style={{ margin: '8px 0 0' }}>Opens your phone's SMS app or WhatsApp with the message ready. Sent at your normal rates.</p>
+    </Dialog>
   );
 }

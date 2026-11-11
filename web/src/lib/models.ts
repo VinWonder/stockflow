@@ -11,6 +11,7 @@ export interface Business {
   email: string;
   address: string;
   kra_pin: string;
+  mpesa_shortcode?: string;
 }
 
 export interface Me {

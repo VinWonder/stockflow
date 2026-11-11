@@ -37,8 +37,8 @@ def _check_phone(phone, exclude_pk=None):
 class BusinessSerializer(serializers.ModelSerializer):
     class Meta:
         model = Business
-        fields = ["id", "name", "phone", "email", "address", "kra_pin", "created_at"]
-        read_only_fields = ["created_at"]
+        fields = ["id", "name", "phone", "email", "address", "kra_pin", "mpesa_shortcode", "created_at"]
+        read_only_fields = ["created_at", "mpesa_shortcode"]
 
 
 class UserSerializer(serializers.ModelSerializer):
