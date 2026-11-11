@@ -55,6 +55,11 @@ def transfer_changed(transfer_id, event):
         people = list(User.objects.filter(locations=t.destination, is_active=True)) + list(admins(biz))
         push(people, "transfer", f"{t.code} is arriving at {t.destination.name}",
              f"The vehicle is less than 200 m away.{driver}{vehicle}. Get ready to count the goods.", "transfer", t.pk, True)
+    elif event == "driver_arrived":
+        people = list(User.objects.filter(locations=t.destination, is_active=True)) + list(admins(biz))
+        push(people, "transfer", f"{t.code} has arrived at {t.destination.name}",
+             f"The driver reports the goods have arrived. Please confirm receipt and count the items.{driver}{vehicle}",
+             "transfer", t.pk, True)
     elif event == "received":
         short = [l for l in t.lines.select_related("variant__product") if l.shortage]
         if short:
@@ -73,14 +78,20 @@ def request_changed(request_id, status):
     r = StockRequest.objects.select_related("location", "created_by").get(pk=request_id)
     verb = "Remove" if r.kind == "remove" else "Add"
     if status == "pending":
+        reason = r.get_reason_display()
+        if r.notes:
+            reason += f": {r.notes}"
         push(managers_of(r.location), "request", f"{verb} stock at {r.location.name} ({r.code})",
-             f"{_lines(r)}. Reason: {r.get_reason_display()}. Confirm when done.", "request", r.pk, True,
+             f"{_lines(r)}. Reason: {reason}. Confirm when done.", "request", r.pk, True,
              exclude=r.created_by)
         if not r.created_by or not r.created_by.is_admin:
             push(admins(r.location.business_id), "request", f"New request {r.code}", f"{verb} at {r.location.name}: {_lines(r)}", "request", r.pk)
     elif status == "confirmed":
+        reason = r.get_reason_display()
+        if r.notes:
+            reason += f": {r.notes}"
         push(admins(r.location.business_id), "request", f"Approve {r.code}: {verb.lower()}d at {r.location.name}",
-             f"{_lines(r, 'confirmed_quantity')}. Reason: {r.get_reason_display()}.", "request", r.pk, True)
+             f"{_lines(r, 'confirmed_quantity')}. Reason: {reason}.", "request", r.pk, True)
     elif status in ("approved", "rejected"):
         people = [r.created_by, r.confirmed_by]
         text = "Stock has been updated." if status == "approved" else (r.rejection_reason or "Rejected by admin.")

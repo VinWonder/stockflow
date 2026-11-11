@@ -254,6 +254,7 @@ export interface Tracking {
   distance_left_m: number | null;
   eta_minutes: number | null;
   arrived_near_at: string | null;
+  driver_arrived_at?: string | null;
   driver_link: string | null;
 }
 

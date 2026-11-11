@@ -100,12 +100,17 @@ function Notifications() {
   const list = useNotifications();
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const overlay = useOverlay();
 
-  const openOne = (n: AppNotification) => {
-    api.post(`/notifications/${n.id}/read/`).then(() => {
+  const openOne = async (n: AppNotification) => {
+    try {
+      if (!n.is_read) await api.post(`/notifications/${n.id}/read/`);
       qc.invalidateQueries({ queryKey: ['notifications'] });
       qc.invalidateQueries({ queryKey: ['unread'] });
-    }, () => {});
+    } catch (e) {
+      overlay.error(e);
+      return;
+    }
     if (n.ref_type === 'transfer' && n.ref_id) navigate(`/transfers/${n.ref_id}`);
     else if (n.ref_type === 'request' && n.ref_id) navigate(`/requests/${n.ref_id}`);
     else if (n.ref_type === 'level') navigate(n.title.startsWith('Out') ? '/alerts?state=out' : '/alerts?state=low');

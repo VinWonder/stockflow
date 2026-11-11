@@ -620,9 +620,9 @@ function DriverCard({ d, onAdd }: { d: Doc; onAdd?: () => void }) {
 function LiveTracking({ d }: { d: Doc }) {
   const navigate = useNavigate();
   const overlay = useOverlay();
-  const active = d.status === 'in_transit';
   const tr = useTracking(d.id, true).data as Tracking | undefined;
   if (!tr) return null;
+  const active = tr.active;
   const markers: Marker[] = [];
   if (tr.source) markers.push({ ...tr.source, label: 'A', color: colors.steel });
   if (tr.destination) markers.push({ ...tr.destination, label: 'B', color: colors.success });
@@ -657,6 +657,11 @@ function LiveTracking({ d }: { d: Doc }) {
           {tr.arrived_near_at && active && (
             <div className="row bold" style={{ marginTop: 10, color: colors.success, gap: 6 }}>
               <MapPin size={18} /> Arrived near {d.destination_name} {ago(tr.arrived_near_at)}
+            </div>
+          )}
+          {tr.driver_arrived_at && d.status === 'in_transit' && (
+            <div className="row bold" style={{ marginTop: 10, color: colors.success, gap: 6 }}>
+              <PackageCheck size={18} /> Driver reported arrival. Confirm and count the goods below.
             </div>
           )}
           {!tr.destination && (
@@ -724,4 +729,3 @@ function Step({ title, who, when, done, last }: { title: string; who?: string | 
     </div>
   );
 }
-

@@ -126,7 +126,9 @@ export function NewRequestScreen({ locationId, kind: initialKind }: { locationId
         <Field label={remove ? 'Why are the goods leaving?' : 'Where did the extra goods come from?'}>
           <div className="wrap">
             {reasonList.map((k) => (
-              <button key={k} type="button" className={`choice${reason === k ? ' on' : ''}`} onClick={() => setReason(k)}>{reasons[k]}</button>
+              <button key={k} type="button" className={`choice${reason === k ? ' on' : ''}`} onClick={() => setReason(k)}>
+                {k === 'other' ? 'Write my own reason' : reasons[k]}
+              </button>
             ))}
           </div>
         </Field>
@@ -158,8 +160,14 @@ export function NewRequestScreen({ locationId, kind: initialKind }: { locationId
       )}
 
       <div className="stack" style={{ marginTop: 12 }}>
-        <Field label={reason === 'other' ? 'What happened? (required)' : 'Notes (customer, order no., details)'}>
-          <textarea className="input" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
+        <Field label={reason === 'other' ? 'Describe your reason (required)' : 'Notes (customer, order no., details)'}>
+          <textarea
+            className="input"
+            rows={2}
+            placeholder={reason === 'other' ? 'Type why these goods are leaving or being added' : ''}
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+          />
         </Field>
         {me.is_admin ? (
           <Switch checked={applyNow} onChange={setApplyNow} title="Apply now" subtitle="I've checked it myself. Skip the manager and approval steps." />

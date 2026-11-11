@@ -1,13 +1,14 @@
 from decimal import Decimal
 
 from django.db import transaction
+from django.utils import timezone
 from rest_framework import serializers
 
 from accounts.models import normalize_phone
 
-from .models import (MOTOR_VEHICLES, Category, Customer, Location, MpesaPayment, Product, Receipt, ReceiptLine, Sale,
-                     SaleLine, SalePayment, StockCount, StockCountLine, StockLevel, StockMovement, StockRequest,
-                     StockRequestLine, Supplier, Transfer, TransferLine, Variant, Vehicle)
+from .models import (MOTOR_VEHICLES, Category, Customer, Location, MpesaPayment, Product, Receipt, ReceiptLine,
+                     ReceiptPayment, Sale, SaleLine, SalePayment, StockCount, StockCountLine, StockLevel,
+                     StockMovement, StockRequest, StockRequestLine, Supplier, Transfer, TransferLine, Variant, Vehicle)
 
 
 def _business_id(serializer):
@@ -348,6 +349,25 @@ class ReceiptLineSerializer(DocLineSerializer):
         fields = ["id", "variant", "variant_label", "sku", "unit", "quantity", "unit_cost"]
 
 
+class ReceiptPaymentSerializer(serializers.ModelSerializer):
+    method_label = serializers.CharField(source="get_method_display", read_only=True)
+    received_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ReceiptPayment
+        fields = ["id", "amount", "method", "method_label", "reference", "received_by_name", "created_at"]
+
+    def get_received_by_name(self, obj):
+        return _person(obj.received_by)
+
+
+class ReceiptPaymentInputSerializer(serializers.Serializer):
+    amount = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal("0.01"))
+    method = serializers.ChoiceField(choices=ReceiptPayment.Method.choices)
+    reference = serializers.CharField(max_length=80, required=False, allow_blank=True, default="")
+    next_payment_date = serializers.DateField(required=False, allow_null=True)
+
+
 class TypedProductLine(serializers.Serializer):
     """A product typed in while receiving a delivery. Saved to the catalogue so it can be picked next time."""
 
@@ -365,19 +385,23 @@ class TypedProductLine(serializers.Serializer):
 class ReceiptSerializer(SameBusinessMixin, LineMixin, serializers.ModelSerializer):
     lines = ReceiptLineSerializer(many=True, required=False)
     new_products = TypedProductLine(many=True, required=False, write_only=True)
+    initial_payment_method = serializers.ChoiceField(choices=ReceiptPayment.Method.choices, write_only=True, required=False)
+    payment_reference = serializers.CharField(max_length=80, write_only=True, required=False, allow_blank=True, default="")
     supplier_name = serializers.CharField(source="supplier.name", read_only=True)
     location_name = serializers.CharField(source="location.name", read_only=True)
     total_amount = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
     balance_due = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
     payment_status = serializers.CharField(read_only=True)
+    payments = ReceiptPaymentSerializer(many=True, read_only=True)
     created_by_name = serializers.SerializerMethodField()
     post_now = serializers.BooleanField(write_only=True, default=True)
 
     class Meta:
         model = Receipt
         fields = ["id", "code", "client_uuid", "location", "location_name", "supplier", "supplier_name", "supplied_on",
-                  "invoice_number", "status", "amount_paid", "total_amount", "balance_due", "payment_status", "notes",
-                  "lines", "new_products", "created_by_name", "created_at", "posted_at", "post_now"]
+                  "invoice_number", "status", "amount_paid", "total_amount", "balance_due", "payment_status",
+                  "next_payment_date", "payments", "notes", "lines", "new_products", "initial_payment_method",
+                  "payment_reference", "created_by_name", "created_at", "posted_at", "post_now"]
         read_only_fields = ["code", "status", "posted_at"]
 
     def validate_lines(self, lines):
@@ -391,6 +415,13 @@ class ReceiptSerializer(SameBusinessMixin, LineMixin, serializers.ModelSerialize
                 for p in data.get("new_products", [])]
         if len(set(keys)) != len(keys):
             raise serializers.ValidationError("The same new product is typed twice. Combine the quantities.")
+        total = sum((line["quantity"] * line["unit_cost"] for line in data.get("lines", [])), Decimal(0))
+        total += sum((product["quantity"] * product["unit_cost"] for product in data.get("new_products", [])), Decimal(0))
+        if data.get("amount_paid", Decimal(0)) > total:
+            raise serializers.ValidationError({"amount_paid": "Amount paid can't be more than the delivery total."})
+        due_date = data.get("next_payment_date")
+        if due_date and due_date < timezone.localdate():
+            raise serializers.ValidationError({"next_payment_date": "Choose today or a future payment date."})
         return data
 
     def get_created_by_name(self, obj):
@@ -404,6 +435,8 @@ class ReceiptSerializer(SameBusinessMixin, LineMixin, serializers.ModelSerialize
     def create(self, data):
         lines = list(data.pop("lines", []))
         typed = data.pop("new_products", [])
+        initial_payment_method = data.pop("initial_payment_method", ReceiptPayment.Method.CASH)
+        payment_reference = data.pop("payment_reference", "")
         data.pop("post_now", None)
         biz = data["location"].business_id
         taken = {l["variant"].id for l in lines}
@@ -415,6 +448,10 @@ class ReceiptSerializer(SameBusinessMixin, LineMixin, serializers.ModelSerialize
             lines.append({"variant": variant, "quantity": p["quantity"], "unit_cost": p["unit_cost"]})
         receipt = Receipt.objects.create(**data)
         ReceiptLine.objects.bulk_create([ReceiptLine(receipt=receipt, **l) for l in lines])
+        if receipt.amount_paid > 0:
+            ReceiptPayment.objects.create(receipt=receipt, amount=receipt.amount_paid, method=initial_payment_method,
+                                          reference=payment_reference,
+                                          received_by=self.context.get("request").user if self.context.get("request") else None)
         return receipt
 
     @staticmethod
@@ -479,9 +516,10 @@ class TransferSerializer(SameBusinessMixin, LineMixin, serializers.ModelSerializ
         fields = ["id", "code", "client_uuid", "source", "source_name", "source_kind", "destination", "destination_name",
                   "destination_kind", "status", "status_label", "notes", "lines", "has_discrepancy", "rejection_reason",
                   "people", "created_at", "approved_at", "dispatched_at", "received_at", "driver_name", "driver_phone",
-                  "vehicle_type", "vehicle_label", "vehicle_reg", "tracking_token", "driver_link", "arrived_near_at", "last_seen"]
+                  "vehicle_type", "vehicle_label", "vehicle_reg", "tracking_token", "driver_link", "arrived_near_at",
+                  "driver_arrived_at", "last_seen"]
         read_only_fields = ["code", "status", "rejection_reason", "approved_at", "dispatched_at", "received_at",
-                            "tracking_token", "arrived_near_at"]
+                            "tracking_token", "arrived_near_at", "driver_arrived_at"]
 
     def get_people(self, obj):
         return {"requested_by": _person(obj.created_by), "approved_by": _person(obj.approved_by),

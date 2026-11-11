@@ -447,7 +447,18 @@ function StkPrompt({ shop, amount, phone, setPhone, state, setState, simulated, 
           <XCircle size={18} /> {state!.status === 'cancelled' ? 'The customer cancelled or didn\'t answer.' : state!.result_desc || 'Payment failed.'} Try again or enter the code.
         </div>
       )}
-      {simulated && <Pill text="Test mode: prompts are marked paid automatically (no real money)" color={colors.amber} />}
+      {simulated && (
+        <div
+          role="status"
+          style={{
+            display: 'block', marginTop: 10, padding: '8px 10px', borderRadius: 10,
+            background: alpha(colors.amber, 0.12), color: colors.amber, fontSize: 12, lineHeight: 1.4,
+            whiteSpace: 'normal', overflowWrap: 'anywhere',
+          }}
+        >
+          Demo only: M-Pesa prompts are simulated; no money is transferred.
+        </div>
+      )}
     </div>
   );
 }

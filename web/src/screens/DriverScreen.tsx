@@ -9,7 +9,7 @@ import { Card, ErrorView, LoadingList, Spinner } from '../ui/common';
 import { directionsLink } from '../ui/MapView';
 
 const SEND_EVERY_MS = 10000;
-const NEAR_M = 300;
+const NEAR_M = 200;
 const memoryKey = (token: string) => `drive-sharing-${token}`;
 const remember = (token: string, on: boolean) => {
   try {
@@ -37,6 +37,7 @@ export function DriverScreen({ token }: { token: string }) {
   const [sharing, setSharing] = useState(false);
   const [lastSent, setLastSent] = useState<Date | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
+  const [arriving, setArriving] = useState(false);
   const watch = useRef<number | null>(null);
   const lastPost = useRef(0);
   const wake = useRef<any>(null);
@@ -45,7 +46,7 @@ export function DriverScreen({ token }: { token: string }) {
     api.get<Json>(`/track/${token}/`).then(
       (t) => {
         setTrip(t);
-        if (t.status !== 'in_transit') remember(token, false);
+        if (t.status !== 'in_transit' || t.driver_arrived_at) remember(token, false);
       },
       (e) => setError(e),
     );
@@ -106,6 +107,20 @@ export function DriverScreen({ token }: { token: string }) {
     setSharing(false);
   };
 
+  const reportArrival = async () => {
+    setArriving(true);
+    try {
+      const result = await api.post<Json>(`/track/${token}/`, { arrived: true });
+      setTrip(result);
+      setGpsError(null);
+      stop();
+    } catch (e: any) {
+      setGpsError(e?.message ?? 'Could not report arrival. Please try again.');
+    } finally {
+      setArriving(false);
+    }
+  };
+
   const start = async () => {
     if (!navigator.geolocation) {
       setGpsError('This phone has no GPS available in the browser.');
@@ -145,7 +160,7 @@ export function DriverScreen({ token }: { token: string }) {
     );
   }
 
-  const active = trip.status === 'in_transit';
+  const active = trip.status === 'in_transit' && !trip.driver_arrived_at;
   const km = trip.distance_left_m != null ? (trip.distance_left_m / 1000).toFixed(trip.distance_left_m < 10000 ? 1 : 0) : null;
   const dest = trip.destination;
   const near = !!trip.arrived_near_at || (trip.distance_left_m != null && trip.distance_left_m <= NEAR_M) || !dest;
@@ -166,8 +181,12 @@ export function DriverScreen({ token }: { token: string }) {
       {!active ? (
         <Card style={{ marginTop: 16, textAlign: 'center', padding: 28 }}>
           <CircleCheck size={48} color={colors.success} />
-          <h2 style={{ margin: '8px 0 4px' }}>{trip.status === 'received' ? 'Delivered. Thank you!' : trip.status_label}</h2>
-          <p className="muted" style={{ margin: 0 }}>You can close this page.</p>
+          <h2 style={{ margin: '8px 0 4px' }}>
+            {trip.driver_arrived_at ? 'Arrival reported' : trip.status === 'received' ? 'Delivered. Thank you!' : trip.status_label}
+          </h2>
+          <p className="muted" style={{ margin: 0 }}>
+            {trip.driver_arrived_at ? 'The shop has been asked to confirm and count the goods.' : 'You can close this page.'}
+          </p>
         </Card>
       ) : (
         <>
@@ -192,9 +211,9 @@ export function DriverScreen({ token }: { token: string }) {
               <button className="btn block success" style={{ marginTop: 14, minHeight: 58, fontSize: 17 }} onClick={start}>
                 <Radio size={22} /> Start trip & share location
               </button>
-            ) : near ? (
-              <button className="btn block outline" style={{ marginTop: 14 }} onClick={stop}>
-                I've arrived: stop sharing
+            ) : sharing && near ? (
+              <button className="btn block success" style={{ marginTop: 14 }} disabled={arriving} onClick={reportArrival}>
+                {arriving ? <Spinner /> : <MapPin size={20} />} I've arrived — notify the shop
               </button>
             ) : null}
             {sharing && (

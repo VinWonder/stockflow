@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { Check, ChevronsUpDown, PencilLine, Plus, Truck } from 'lucide-react';
 
 import { api } from '../lib/api';
@@ -8,7 +9,7 @@ import { apiDate, money, numericInput, toD, uuid } from '../lib/format';
 import { canManage, newLine, type Doc, type LineDraft, type Location, type StockLevel, type Supplier, type Variant } from '../lib/models';
 import { useLocations, useRefreshEverything } from '../lib/queries';
 import { colors } from '../lib/theme';
-import { BottomActions, Card, Field, SectionTitle, Spinner, TopBar, useBack } from '../ui/common';
+import { BottomActions, Card, Field, SectionTitle, Segmented, Spinner, TopBar } from '../ui/common';
 import { LinesEditor, linesPayload } from '../ui/LinesEditor';
 import { useOverlay } from '../ui/overlay';
 import { LocationField, usePickLocation, usePickSupplier, usePickVariant } from '../ui/pickers';
@@ -20,7 +21,7 @@ import { blankTyped, TypedProducts, typedPayload, typedProblem, typedTotal, type
  */
 export function ReceiveScreen({ locationId }: { locationId: number | null }) {
   const me = useMe();
-  const back = useBack();
+  const navigate = useNavigate();
   const overlay = useOverlay();
   const refresh = useRefreshEverything();
   const pickVariant = usePickVariant();
@@ -34,6 +35,9 @@ export function ReceiveScreen({ locationId }: { locationId: number | null }) {
   const [date, setDate] = useState(apiDate(new Date()));
   const [invoice, setInvoice] = useState('');
   const [paid, setPaid] = useState('0');
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'mpesa' | 'bank' | 'cheque'>('cash');
+  const [paymentReference, setPaymentReference] = useState('');
+  const [nextPaymentDate, setNextPaymentDate] = useState('');
   const [notes, setNotes] = useState('');
   const [lines, setLines] = useState<LineDraft[]>([]);
   const [typed, setTyped] = useState<TypedProduct[]>([]);
@@ -105,13 +109,16 @@ export function ReceiveScreen({ locationId }: { locationId: number | null }) {
         supplied_on: date,
         invoice_number: invoice.trim(),
         amount_paid: paidNum.toFixed(2),
+        initial_payment_method: paymentMethod,
+        payment_reference: paymentReference.trim(),
+        next_payment_date: total > paidNum ? nextPaymentDate || null : null,
         notes: notes.trim(),
         lines: linesPayload(lines, 'unit_cost'),
         new_products: typedPayload(typed),
       });
       refresh();
       overlay.success(`${invoice.trim() ? `Invoice ${invoice.trim()}` : 'Delivery'}: ${count} item(s) added to ${location.name}${typed.length ? `. ${typed.length} new product(s) saved to your list.` : ''}`);
-      back();
+      navigate('/');
     } catch (e) {
       overlay.error(e);
     } finally {
@@ -194,9 +201,35 @@ export function ReceiveScreen({ locationId }: { locationId: number | null }) {
             <button type="button" className="btn tonal small" onClick={() => setPaid(total.toFixed(0))}>Paid in full</button>
           </div>
         </Field>
+        {paidNum > 0 && (
+          <>
+            <Field label="Payment method" style={{ marginTop: 12 }}>
+              <Segmented<'cash' | 'mpesa' | 'bank' | 'cheque'>
+                value={paymentMethod}
+                onChange={setPaymentMethod}
+                options={[
+                  { value: 'cash', label: 'Cash' },
+                  { value: 'mpesa', label: 'M-Pesa' },
+                  { value: 'bank', label: 'Bank' },
+                  { value: 'cheque', label: 'Cheque' },
+                ]}
+              />
+            </Field>
+            {(paymentMethod === 'bank' || paymentMethod === 'cheque' || paymentMethod === 'mpesa') && (
+              <Field label={paymentMethod === 'cheque' ? 'Cheque number (optional)' : 'Payment reference (optional)'} style={{ marginTop: 12 }}>
+                <input className="input" value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} />
+              </Field>
+            )}
+          </>
+        )}
         <div className="bold" style={{ marginTop: 8, color: paidNum >= total ? colors.success : '#C2410C' }}>
           {paidNum >= total && total > 0 ? 'Fully paid' : `Balance owed to supplier: ${money(total - paidNum)}`}
         </div>
+        {total > paidNum && (
+          <Field label="Next payment due (optional)" style={{ marginTop: 12 }}>
+            <input className="input" type="date" min={apiDate(new Date())} value={nextPaymentDate} onChange={(e) => setNextPaymentDate(e.target.value)} />
+          </Field>
+        )}
       </Card>
       <Field label="Notes (optional)" style={{ marginTop: 12 }}>
         <textarea className="input" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />

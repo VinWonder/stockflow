@@ -363,6 +363,7 @@ class Receipt(Document):
     invoice_number = models.CharField(max_length=50, blank=True)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.DRAFT, db_index=True)
     amount_paid = models.DecimalField(**MONEY, default=ZERO)
+    next_payment_date = models.DateField(null=True, blank=True)
     posted_at = models.DateTimeField(null=True, blank=True)
 
     @property
@@ -385,6 +386,24 @@ class ReceiptLine(models.Model):
     variant = models.ForeignKey(Variant, on_delete=models.PROTECT)
     quantity = models.DecimalField(**QTY)
     unit_cost = models.DecimalField(**MONEY, default=ZERO)
+
+
+class ReceiptPayment(models.Model):
+    class Method(models.TextChoices):
+        CASH = "cash", "Cash"
+        MPESA = "mpesa", "M-Pesa"
+        BANK = "bank", "Bank transfer"
+        CHEQUE = "cheque", "Cheque"
+
+    receipt = models.ForeignKey(Receipt, related_name="payments", on_delete=models.CASCADE)
+    amount = models.DecimalField(**MONEY)
+    method = models.CharField(max_length=10, choices=Method.choices)
+    reference = models.CharField(max_length=80, blank=True)
+    received_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["created_at"]
 
 
 class Vehicle(models.TextChoices):
@@ -433,6 +452,7 @@ class Transfer(Document):
     # Secret link the driver opens on their phone to share live GPS (no login needed).
     tracking_token = models.CharField(max_length=40, unique=True, null=True, blank=True)
     arrived_near_at = models.DateTimeField(null=True, blank=True, help_text="When the vehicle first got close to the destination")
+    driver_arrived_at = models.DateTimeField(null=True, blank=True, help_text="When the driver reported arrival at the destination")
 
     @property
     def has_discrepancy(self):

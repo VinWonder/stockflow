@@ -16,13 +16,13 @@ from rest_framework.throttling import AnonRateThrottle
 
 from . import mpesa, services
 from .exceptions import StockError
-from .models import (Category, Customer, Location, MpesaPayment, Product, Receipt, ReceiptLine, Sale, SalePayment,
-                     StockCount, StockCountLine, StockLevel, StockMovement, StockRequest, Supplier, Transfer, Variant,
-                     Vehicle)
+from .models import (Category, Customer, Location, MpesaPayment, Product, Receipt, ReceiptLine, ReceiptPayment, Sale,
+                     SalePayment, StockCount, StockCountLine, StockLevel, StockMovement, StockRequest, Supplier,
+                     Transfer, Variant, Vehicle)
 from .serializers import (CategorySerializer, CustomerSerializer, LocationSerializer, MovementSerializer,
                           MpesaPaymentSerializer, ProductSerializer, QuantityMapSerializer, ReceiptSerializer,
-                          SaleSerializer, StockCountSerializer, StockLevelSerializer, StockRequestSerializer,
-                          SupplierSerializer, TransferSerializer, VariantSerializer)
+                          ReceiptPaymentInputSerializer, SaleSerializer, StockCountSerializer, StockLevelSerializer,
+                          StockRequestSerializer, SupplierSerializer, TransferSerializer, VariantSerializer)
 
 MONEY_FIELD = DecimalField(max_digits=16, decimal_places=2)
 
@@ -330,7 +330,8 @@ class ReceiptViewSet(DocumentViewSet):
     search_fields = ["code", "invoice_number", "supplier__name"]
 
     def get_queryset(self):
-        return self.scope(Receipt.objects.select_related("location", "supplier", "created_by").prefetch_related("lines__variant__product"))
+        return self.scope(Receipt.objects.select_related("location", "supplier", "created_by")
+                          .prefetch_related("lines__variant__product", "payments__received_by"))
 
     def create(self, request, *args, **kwargs):
         cuid = request.data.get("client_uuid")
@@ -356,12 +357,24 @@ class ReceiptViewSet(DocumentViewSet):
 
     @action(detail=True, methods=["post"])
     def payment(self, request, pk=None):
-        receipt = self.get_object()
         if not request.user.is_admin:
             raise PermissionDenied("Only an admin can record supplier payments.")
-        amount = Decimal(str(request.data.get("amount", "0")))
-        receipt.amount_paid = max(Decimal("0"), receipt.amount_paid + amount)
-        receipt.save(update_fields=["amount_paid", "updated_at"])
+        payment_serializer = ReceiptPaymentInputSerializer(data=request.data)
+        payment_serializer.is_valid(raise_exception=True)
+        data = payment_serializer.validated_data
+        receipt = self.get_object()
+        with transaction.atomic():
+            receipt = Receipt.objects.select_for_update().get(pk=receipt.pk)
+            if data["amount"] > receipt.balance_due:
+                raise ValidationError({"amount": "Payment can't be more than the remaining balance."})
+            due_date = data.get("next_payment_date")
+            if due_date and due_date < timezone.localdate():
+                raise ValidationError({"next_payment_date": "Choose today or a future payment date."})
+            ReceiptPayment.objects.create(receipt=receipt, amount=data["amount"], method=data["method"],
+                                          reference=data["reference"], received_by=request.user)
+            receipt.amount_paid += data["amount"]
+            receipt.next_payment_date = due_date if receipt.amount_paid < receipt.total_amount else None
+            receipt.save(update_fields=["amount_paid", "next_payment_date", "updated_at"])
         return self._reply(receipt)
 
 
@@ -468,8 +481,11 @@ def driver_tracking(request, token):
     """The driver's page (no login): see the trip and send GPS fixes. The token is the secret."""
     t = get_object_or_404(Transfer.objects.select_related("source", "destination"), tracking_token=token)
     if request.method == "POST":
-        services.record_track_point(t, request.data.get("lat"), request.data.get("lng"), request.data.get("accuracy"),
-                                    request.data.get("speed"), request.data.get("heading"))
+        if request.data.get("arrived") is True:
+            t = services.driver_arrived(t)
+        else:
+            services.record_track_point(t, request.data.get("lat"), request.data.get("lng"), request.data.get("accuracy"),
+                                        request.data.get("speed"), request.data.get("heading"))
     summary = services.tracking_summary(t)
     summary.pop("points", None)
     return Response({
@@ -477,7 +493,7 @@ def driver_tracking(request, token):
         "from": t.source.name, "from_address": t.source.address, "to": t.destination.name,
         "to_address": t.destination.address, "to_phone": t.destination.phone,
         "driver_name": t.driver_name, "vehicle": t.get_vehicle_type_display(), "vehicle_reg": t.vehicle_reg,
-        "items": t.lines.count(), **summary,
+        "items": t.lines.count(), "driver_arrived_at": t.driver_arrived_at, **summary,
     })
 
 

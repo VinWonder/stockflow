@@ -270,6 +270,7 @@ def record_track_point(transfer: Transfer, lat, lng, accuracy=None, speed=None, 
     transfer = Transfer.objects.select_for_update().select_related("destination").get(pk=transfer.pk)
     _require(transfer.status == Transfer.Status.IN_TRANSIT, "Tracking has ended: these goods are no longer on the way.",
              "tracking_closed")
+    _require(transfer.driver_arrived_at is None, "Arrival was already reported; tracking has ended.", "tracking_closed")
     try:
         lat = Decimal(str(lat)).quantize(Decimal("0.000001"))
         lng = Decimal(str(lng)).quantize(Decimal("0.000001"))
@@ -291,6 +292,24 @@ def record_track_point(transfer: Transfer, lat, lng, accuracy=None, speed=None, 
     return point
 
 
+@transaction.atomic
+def driver_arrived(transfer: Transfer):
+    """Let the driver report arrival, but leave receipt and stock confirmation to destination staff."""
+    transfer = Transfer.objects.select_for_update().select_related("destination").get(pk=transfer.pk)
+    _require(transfer.status == Transfer.Status.IN_TRANSIT, "This trip is no longer active.")
+    if transfer.driver_arrived_at:
+        return transfer
+    if transfer.destination.has_map_point:
+        last = transfer.track_points.order_by("-recorded_at").first()
+        _require(last is not None, "Share your location first so arrival can be confirmed.")
+        distance = distance_m(last.latitude, last.longitude, transfer.destination.latitude, transfer.destination.longitude)
+        _require(distance <= ARRIVAL_RADIUS_M, "You can report arrival only when you are within 200 m of the destination.")
+    transfer.driver_arrived_at = timezone.now()
+    transfer.save(update_fields=["driver_arrived_at", "updated_at"])
+    _notify("transfer_changed", transfer.pk, "driver_arrived")
+    return transfer
+
+
 def tracking_summary(transfer: Transfer):
     """Where the goods are now, how far they still have to go and a rough arrival time."""
     points = list(transfer.track_points.order_by("-recorded_at")[:300])
@@ -299,7 +318,7 @@ def tracking_summary(transfer: Transfer):
     last = points[-1] if points else None
     place = lambda l: {"lat": l.latitude, "lng": l.longitude, "name": l.name} if l.has_map_point else None  # noqa: E731
     out = {
-        "active": transfer.status == Transfer.Status.IN_TRANSIT,
+        "active": transfer.status == Transfer.Status.IN_TRANSIT and transfer.driver_arrived_at is None,
         "source": place(src),
         "destination": place(dst),
         "points": [{"lat": p.latitude, "lng": p.longitude, "at": p.recorded_at} for p in points],
@@ -307,6 +326,7 @@ def tracking_summary(transfer: Transfer):
         "distance_left_m": None,
         "eta_minutes": None,
         "arrived_near_at": transfer.arrived_near_at,
+        "driver_arrived_at": transfer.driver_arrived_at,
     }
     if last:
         out["last"] = {"lat": last.latitude, "lng": last.longitude, "at": last.recorded_at, "speed": last.speed,

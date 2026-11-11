@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal as D
 
 from django.contrib.auth import get_user_model
@@ -10,8 +10,8 @@ from rest_framework.test import APIClient
 from accounts.models import Business
 from inventory import services
 from inventory.exceptions import InsufficientStock, StockError
-from inventory.models import (Customer, Location, Sale, StockLevel, StockMovement, StockRequest, Supplier, Transfer,
-                              TransferLine, Variant)
+from inventory.models import (Customer, Location, Receipt, Sale, StockLevel, StockMovement, StockRequest, Supplier,
+                              Transfer, TransferLine, Variant)
 from messaging.handler import Unresolved, execute, handle_incoming
 from messaging.models import Notification
 
@@ -92,6 +92,14 @@ class StockFlowTests(TestCase):
         t.refresh_from_db()
         self.assertIsNotNone(t.arrived_near_at)
         self.assertTrue(Notification.objects.filter(title__contains="arriving").exists())
+        with self.captureOnCommitCallbacks(execute=True):
+            arrived = anon.post(f"/api/track/{t.tracking_token}/", {"arrived": True}, format="json")
+        self.assertEqual(arrived.status_code, 200, arrived.data)
+        t.refresh_from_db()
+        self.assertIsNotNone(t.driver_arrived_at)
+        self.assertTrue(Notification.objects.filter(user=self.admin, title__contains="has arrived").exists())
+        stopped = anon.post(f"/api/track/{t.tracking_token}/", {"lat": "-1.282000", "lng": "36.823400"}, format="json")
+        self.assertEqual(stopped.status_code, 409)
         self.assertEqual(anon.get("/api/track/not-a-token/").status_code, 404)
         self.api.force_authenticate(self.admin)
         track = self.api.get(f"/api/transfers/{t.id}/track/").data
@@ -291,6 +299,49 @@ class StockFlowTests(TestCase):
         self.assertIn(("MAIN", "CEM-50KG"), [(o["location_code"], o["variant"]["sku"]) for o in out])
         alerts = self.api.get(f"/api/stock-alerts/?location={self.main.id}").data
         self.assertGreaterEqual(alerts["out"], 1)
+
+    def test_receipt_records_supplier_payment_methods_and_reschedules_balance(self):
+        self.api.force_authenticate(self.admin)
+        supplier = Supplier.objects.filter(business=self.admin.business).first()
+        due = date.today() + timedelta(days=10)
+        response = self.api.post("/api/receipts/", {
+            "location": self.gdn.id,
+            "supplier": supplier.id,
+            "supplied_on": date.today().isoformat(),
+            "amount_paid": "100.00",
+            "initial_payment_method": "bank",
+            "payment_reference": "BANK-001",
+            "next_payment_date": due.isoformat(),
+            "lines": [{"variant": self.cement.id, "quantity": "2", "unit_cost": "300.00"}],
+        }, format="json")
+        self.assertEqual(response.status_code, 201, response.data)
+        receipt_id = response.data["id"]
+        self.assertEqual(response.data["balance_due"], "500.00")
+        self.assertEqual(response.data["payments"][0]["method"], "bank")
+        self.assertEqual(response.data["payments"][0]["reference"], "BANK-001")
+        self.assertEqual(response.data["next_payment_date"], due.isoformat())
+
+        response = self.api.post(f"/api/receipts/{receipt_id}/payment/", {
+            "amount": "200.00", "method": "cheque", "reference": "CHQ-12",
+            "next_payment_date": (due + timedelta(days=10)).isoformat(),
+        }, format="json")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["balance_due"], "300.00")
+        self.assertEqual(response.data["payments"][1]["method"], "cheque")
+        self.assertEqual(response.data["next_payment_date"], (due + timedelta(days=10)).isoformat())
+
+        response = self.api.post(f"/api/receipts/{receipt_id}/payment/", {
+            "amount": "300.00", "method": "bank", "reference": "BANK-002",
+        }, format="json")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["payment_status"], "paid")
+        self.assertIsNone(response.data["next_payment_date"])
+        self.assertEqual(Receipt.objects.get(pk=receipt_id).payments.count(), 3)
+
+        overpayment = self.api.post(f"/api/receipts/{receipt_id}/payment/", {
+            "amount": "0.01", "method": "cash",
+        }, format="json")
+        self.assertEqual(overpayment.status_code, 400)
 
 
 class AccountTests(TestCase):
