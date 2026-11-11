@@ -137,8 +137,8 @@ EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
 EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
 EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
 EMAIL_TIMEOUT = 20
-# Ask new owners for an emailed code at sign-up. Off until email sending works on the live server.
-SIGNUP_EMAIL_CODE = env.bool("SIGNUP_EMAIL_CODE", default=False)
+# Ask new owners to confirm their email before opening an account.
+SIGNUP_EMAIL_CODE = env.bool("SIGNUP_EMAIL_CODE", default=True)
 # Render's free plan blocks SMTP, so on Render use Brevo's HTTPS API (BREVO_API_KEY) instead of Gmail SMTP.
 BREVO_API_KEY = env("BREVO_API_KEY", default="")
 EMAIL_BACKEND = env("EMAIL_BACKEND", default=(

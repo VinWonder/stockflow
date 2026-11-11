@@ -89,7 +89,11 @@ def signup_code(request):
         log.exception("Sending the sign-up code failed")
         return Response({"detail": "We couldn't send the email right now. Check the address or try again in a minute."},
                         status=503)
-    return Response({"detail": f"A 6-digit code was sent to {email}."})
+    entry = SignupCode.latest(email)
+    return Response({
+        "detail": f"A 6-digit code was sent to {email}.",
+        "expires_at": (entry.created_at + SignupCode.LIFETIME).isoformat(),
+    })
 
 
 @api_view(["POST"])

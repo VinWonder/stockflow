@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Building2, Check, KeyRound, Mail, Phone, Plus, Store, Trash2, User, Warehouse } from 'lucide-react';
 
@@ -37,14 +37,30 @@ export function SignupScreen() {
   const [stores, setStores] = useState<StoreDraft[]>([{ name: '', kind: 'godown', address: '' }]);
   const [busy, setBusy] = useState(false);
   const [code, setCode] = useState('');
+  const [codeExpiresAt, setCodeExpiresAt] = useState<number | null>(null);
+  const [clock, setClock] = useState(() => Date.now());
   // The email-code step is switched on from the server (SIGNUP_EMAIL_CODE); while it's off, step 1 is skipped.
-  const needCode = !!useConfig().data?.signup_email_code;
+  const config = useConfig();
+  const needCode = config.data?.signup_email_code ?? true;
   const shown = STEPS.map((label, index) => ({ label, index })).filter((s) => needCode || s.index !== 1);
+  const secondsRemaining = codeExpiresAt === null ? 0 : Math.max(0, Math.ceil((codeExpiresAt - clock) / 1000));
+  const codeExpired = codeExpiresAt !== null && secondsRemaining === 0;
+
+  useEffect(() => {
+    if (step !== 1 || codeExpiresAt === null) return;
+    const timer = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [step, codeExpiresAt]);
 
   const sendCode = async () => {
     setBusy(true);
     try {
-      await api.post('/auth/register/code/', { email: email.trim() });
+      const response = await api.post<{ expires_at: string }>('/auth/register/code/', { email: email.trim() });
+      const expiry = Date.parse(response.expires_at);
+      if (!Number.isFinite(expiry)) throw new Error('The server did not return a valid code expiry time. Please try again.');
+      setCode('');
+      setClock(Date.now());
+      setCodeExpiresAt(expiry);
       overlay.success(`Code sent to ${email.trim()}. Check your inbox (and spam).`);
       return true;
     } catch (e) {
@@ -67,6 +83,7 @@ export function SignupScreen() {
       if (!(await sendCode())) return;
     }
     if (step === 1) {
+      if (codeExpired) return overlay.error('This code has expired. Request a new one.');
       if (!/^\d{6}$/.test(code)) return overlay.error('Enter the 6-digit code from the email.');
       setBusy(true);
       try {
@@ -144,7 +161,7 @@ export function SignupScreen() {
             </div>
             <PasswordInput value={password} onChange={setPassword} placeholder="Password (8+ characters)" autoComplete="new-password" />
             <PasswordInput value={password2} onChange={setPassword2} placeholder="Type the password again" autoComplete="new-password" />
-            <button className="btn block" disabled={busy} onClick={next}>{busy ? <Spinner /> : needCode ? 'Next: confirm email' : 'Next: main shop'}</button>
+            <button className="btn block" disabled={busy || config.isPending} onClick={next}>{busy ? <Spinner /> : needCode ? 'Next: confirm email' : 'Next: main shop'}</button>
           </div>
         )}
 
@@ -165,7 +182,12 @@ export function SignupScreen() {
                 onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
               />
             </div>
-            <button className="btn block" disabled={busy} onClick={next}>{busy ? <Spinner /> : 'Confirm email'}</button>
+            <p className="small" style={{ margin: 0, color: codeExpired ? 'var(--danger)' : undefined }}>
+              {codeExpired
+                ? 'This code has expired. Request a new one.'
+                : `Code expires in ${Math.floor(secondsRemaining / 60)}:${String(secondsRemaining % 60).padStart(2, '0')}.`}
+            </p>
+            <button className="btn block" disabled={busy || codeExpired} onClick={next}>{busy ? <Spinner /> : 'Confirm email'}</button>
             <button className="btn text block" disabled={busy} onClick={sendCode}>Send a new code</button>
           </div>
         )}

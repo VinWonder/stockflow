@@ -38,6 +38,8 @@ services:
         value: vinwonder05@gmail.com
       - key: DEFAULT_FROM_EMAIL
         value: StockFlow <vinwonder05@gmail.com>
+      - key: SIGNUP_EMAIL_CODE
+        value: "True"
       - key: EMAIL_HOST_PASSWORD
         sync: false
       # Render's free plan blocks SMTP: emails go through Brevo's API when this key is set (Render dashboard)

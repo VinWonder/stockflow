@@ -159,7 +159,7 @@ function ForgotPassword({ initialEmail, onBack, onDone }: { initialEmail: string
 
   const confirmCode = (e: FormEvent) => {
     e.preventDefault();
-    if (!/^d{6}$/.test(code)) return overlay.error('Enter the 6-digit code from the email.');
+    if (!/^\d{6}$/.test(code)) return overlay.error('Enter the 6-digit code from the email.');
     return run(async () => {
       await api.post('/auth/password/verify/', { email: email.trim(), code });
       setStep('password');
@@ -204,7 +204,7 @@ function ForgotPassword({ initialEmail, onBack, onDone }: { initialEmail: string
                 maxLength={6}
                 style={{ letterSpacing: 6, fontWeight: 800, fontSize: 18 }}
                 value={code}
-                onChange={(e) => setCode(e.target.value.replace(/D/g, ''))}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
               />
             </div>
             <button className="btn block" type="submit" disabled={busy}>{busy ? <Spinner /> : 'Confirm code'}</button>
