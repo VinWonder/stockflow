@@ -2,10 +2,9 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowDownLeft, ArrowLeftRight, Boxes, Building2, ChevronRight, HandCoins, LogOut, MessageSquareText, Moon, PackageMinus,
-  Server, ShoppingCart, Store, Truck, TriangleAlert, UserCog, Users, type LucideIcon,
+  ShoppingCart, Store, Truck, TriangleAlert, UserCog, Users, type LucideIcon,
 } from 'lucide-react';
 
-import { getBaseUrl } from '../lib/api';
 import { useAuth, useMe } from '../lib/auth';
 import { displayName, initials, isManager, roleLabel } from '../lib/models';
 import { applyThemeMode, colors, getThemeMode, type ThemeMode } from '../lib/theme';
@@ -104,13 +103,6 @@ export function MoreScreen() {
             <option value="dark">Dark</option>
           </select>
         </label>
-        <div className="tile" style={{ cursor: 'default' }}>
-          <Server size={22} />
-          <div className="col grow">
-            <span>Server</span>
-            <span className="small muted">{getBaseUrl()}</span>
-          </div>
-        </div>
         <button
           className="tile"
           onClick={async () => {
