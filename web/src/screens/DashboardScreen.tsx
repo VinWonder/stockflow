@@ -113,6 +113,7 @@ function Delta({ now, before }: { now: unknown; before: unknown }) {
 
 function DashboardBody({ me, d, store }: { me: Me; d: Json; store: Location | null }) {
   const navigate = useNavigate();
+  const [showAllRecent, setShowAllRecent] = useState(false);
   const alerts = useStockAlerts(store?.id ?? null).data;
   const t = d.totals ?? {};
   const a = d.action_needed ?? {};
@@ -299,9 +300,14 @@ function DashboardBody({ me, d, store }: { me: Me; d: Json; store: Location | nu
         </>
       )}
 
-      <SectionTitle>Latest activity</SectionTitle>
+      <SectionTitle
+        action={recent.length > 3 ? (showAllRecent ? 'Show less' : `Show all (${recent.length})`) : undefined}
+        onAction={() => setShowAllRecent((show) => !show)}
+      >
+        Latest activity
+      </SectionTitle>
       <div className="list">
-        {recent.slice(0, 8).map((m) => (
+        {recent.slice(0, showAllRecent ? 10 : 3).map((m) => (
           <MoveRow key={m.id} m={m} />
         ))}
         {recent.length === 0 && <p className="muted small">No stock movements yet. Start by receiving a supplier delivery.</p>}
