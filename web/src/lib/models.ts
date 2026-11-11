@@ -273,6 +273,7 @@ export interface AppConfig {
   google_maps_key: string;
   mpesa_prompt: boolean;
   mpesa_simulated: boolean;
+  sms_live?: boolean;
   vehicles: { value: string; label: string }[];
 }
 

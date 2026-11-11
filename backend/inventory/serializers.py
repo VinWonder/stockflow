@@ -382,6 +382,7 @@ class TransferSerializer(SameBusinessMixin, LineMixin, serializers.ModelSerializ
     has_discrepancy = serializers.BooleanField(read_only=True)
     people = serializers.SerializerMethodField()
     last_seen = serializers.SerializerMethodField()
+    driver_link = serializers.SerializerMethodField()
     vehicle_type = serializers.ChoiceField(choices=Vehicle.choices, required=False, allow_blank=True)
 
     class Meta:
@@ -389,13 +390,21 @@ class TransferSerializer(SameBusinessMixin, LineMixin, serializers.ModelSerializ
         fields = ["id", "code", "client_uuid", "source", "source_name", "source_kind", "destination", "destination_name",
                   "destination_kind", "status", "status_label", "notes", "lines", "has_discrepancy", "rejection_reason",
                   "people", "created_at", "approved_at", "dispatched_at", "received_at", "driver_name", "driver_phone",
-                  "vehicle_type", "vehicle_label", "vehicle_reg", "tracking_token", "arrived_near_at", "last_seen"]
+                  "vehicle_type", "vehicle_label", "vehicle_reg", "tracking_token", "driver_link", "arrived_near_at", "last_seen"]
         read_only_fields = ["code", "status", "rejection_reason", "approved_at", "dispatched_at", "received_at",
                             "tracking_token", "arrived_near_at"]
 
     def get_people(self, obj):
         return {"requested_by": _person(obj.created_by), "approved_by": _person(obj.approved_by),
                 "dispatched_by": _person(obj.dispatched_by), "received_by": _person(obj.received_by)}
+
+    def get_driver_link(self, obj):
+        request = self.context.get("request")
+        if not obj.tracking_token or request is None:
+            return None
+        from .views import tracking_link
+
+        return tracking_link(request, obj)
 
     def get_last_seen(self, obj):
         p = obj.track_points.order_by("-recorded_at").first() if obj.status == "in_transit" else None

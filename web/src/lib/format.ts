@@ -83,3 +83,10 @@ export function numericInput(v: string, decimals = true) {
   const [head, ...rest] = cleaned.split('.');
   return rest.length ? `${head}.${rest.join('')}` : head;
 }
+
+/** Link that opens the phone's own SMS app with the number and message filled in (iPhone uses "&body=", Android "?body="). */
+export function smsHref(phone: string, body: string) {
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const to = phone ? `+${phone.replace(/[^0-9]/g, '')}` : '';
+  return `sms:${to}${ios ? '&' : '?'}body=${encodeURIComponent(body)}`;
+}

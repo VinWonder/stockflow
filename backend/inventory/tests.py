@@ -96,6 +96,10 @@ class StockFlowTests(TestCase):
         self.api.force_authenticate(self.admin)
         track = self.api.get(f"/api/transfers/{t.id}/track/").data
         self.assertEqual(len(track["points"]), 2)
+        detail = self.api.get(f"/api/transfers/{t.id}/").data
+        self.assertTrue(detail["driver_link"].endswith(f"/drive/{t.tracking_token}"))
+        self.assertTrue(detail["driver_link"].startswith("http"))
+        self.assertFalse(self.api.get("/api/config/").data["sms_live"])
         services.receive_transfer(t, self.admin)
         r = anon.post(f"/api/track/{t.tracking_token}/", {"lat": "-1.28", "lng": "36.82"}, format="json")
         self.assertEqual(r.status_code, 409)  # tracking ends when the goods are received

@@ -7,19 +7,19 @@ import {
 
 import { api } from '../lib/api';
 import { useMe } from '../lib/auth';
-import { ago, copyText, dateTime, numericInput, qty, qtyOut, toD, uuid } from '../lib/format';
+import { ago, copyText, dateTime, numericInput, qty, qtyOut, smsHref, toD, uuid } from '../lib/format';
 import {
   canManage, displayName, isMotor, newLine, vehicles, works, type Doc, type LineDraft, type Location, type StockLevel,
   type Tracking,
 } from '../lib/models';
-import { useDirectory, useRefreshEverything, useTracking, useTransfer, useTransfers } from '../lib/queries';
+import { useConfig, useDirectory, useRefreshEverything, useTracking, useTransfer, useTransfers } from '../lib/queries';
 import { colors } from '../lib/theme';
 import {
   BottomActions, Card, EmptyState, ErrorView, Field, LoadingList, Pill, SectionTitle, Spinner, StatusChip, TopBar,
 } from '../ui/common';
 import { LinesEditor, linesPayload } from '../ui/LinesEditor';
 import { directionsLink, MapView, type Marker } from '../ui/MapView';
-import { Sheet, useAskText, useOverlay } from '../ui/overlay';
+import { Dialog, Sheet, useAskText, useOverlay } from '../ui/overlay';
 import { LocationField, usePickLocation, usePickVariant } from '../ui/pickers';
 
 const vehicleIcon: Record<string, LucideIcon> = { motorbike: Bike, tuktuk: Truck, pickup: Truck, lorry: Truck, handcart: ShoppingCart, on_foot: Footprints, other: Truck };
@@ -330,7 +330,7 @@ function DispatchSheet({ d, close }: { d: Doc; close: (v?: DriverDraft & { notif
         <label className="switch-row">
           <div className="col grow">
             <span className="bold">Send the tracking link to the driver</span>
-            <span className="small muted">By SMS. The driver opens it so you can follow the goods on the map.</span>
+            <span className="small muted">Opens your phone's SMS app with the link ready. The driver taps it so you can follow the goods on the map.</span>
           </div>
           <input type="checkbox" hidden checked={notify} onChange={(e) => setNotify(e.target.checked)} />
           <span className={`switch${notify ? ' on' : ''}`} aria-hidden="true" />
@@ -352,6 +352,40 @@ function DispatchSheet({ d, close }: { d: Doc; close: (v?: DriverDraft & { notif
   );
 }
 
+export const driverMessage = (d: Doc) =>
+  `StockFlow ${d.code}: you are taking goods from ${d.source_name} to ${d.destination_name}. ` +
+  `Open this link and keep it open while you drive: ${d.driver_link}`;
+
+/** After dispatch: hand the tracking link to the driver through this phone's SMS app, WhatsApp, or copy it. */
+function SendLinkDialog({ d, close }: { d: Doc; close: () => void }) {
+  const overlay = useOverlay();
+  const phone = d.driver_phone ? intlPhone(String(d.driver_phone)) : '';
+  const message = driverMessage(d);
+  return (
+    <Dialog onClose={close} title={`Send the link to ${d.driver_name}`} actions={<button className="btn text" onClick={close}>Done</button>}>
+      <p className="small" style={{ marginTop: 0 }}>
+        The driver opens the link on their phone and taps <b>Start</b>, then you can watch the goods move to {d.destination_name}.
+      </p>
+      <div className="stack">
+        <a className="btn block" href={smsHref(phone, message)} onClick={() => window.setTimeout(close, 500)}>
+          <MessageSquareText size={20} /> Open SMS app
+        </a>
+        {phone && (
+          <a className="btn whatsapp block" href={`https://wa.me/${phone}?text=${encodeURIComponent(message)}`} target="_blank" rel="noreferrer" onClick={() => window.setTimeout(close, 500)}>
+            <MessageCircle size={20} /> Send by WhatsApp
+          </a>
+        )}
+        <button className="btn outline block" onClick={async () => {
+          await copyText(message);
+          overlay.success('Message copied');
+        }}>
+          <Copy size={20} /> Copy message
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+
 // ----------------------------------------------------------------------------- detail
 /** Transfer detail with a status timeline, driver, live map, and the right button for the right person at each step. */
 export function TransferDetailScreen({ id }: { id: number }) {
@@ -363,14 +397,17 @@ export function TransferDetailScreen({ id }: { id: number }) {
   const [busy, setBusy] = useState(false);
   const [received, setReceived] = useState<Record<number, string>>({});
 
-  const act = async (action: string, done: string, body: object = {}) => {
+  const config = useConfig().data;
+  const act = async (action: string, done: string, body: object = {}): Promise<Doc | null> => {
     setBusy(true);
     try {
-      await api.post(`/transfers/${id}/${action}/`, body);
+      const r = await api.post<Doc>(`/transfers/${id}/${action}/`, body);
       refresh();
       overlay.success(done);
+      return r;
     } catch (e) {
       overlay.error(e);
+      return null;
     } finally {
       setBusy(false);
     }
@@ -396,7 +433,12 @@ export function TransferDetailScreen({ id }: { id: number }) {
       buttons.push(
         <button key="dispatch" className="btn" disabled={busy} onClick={async () => {
           const driver = await overlay.open<DriverDraft & { notify_driver: boolean }>((close) => <DispatchSheet d={d} close={close} />);
-          if (driver) act('dispatch', `Dispatched with ${driver.driver_name}. ${d.destination_name} has been notified.`, driver);
+          if (!driver) return;
+          const r = await act('dispatch', `Dispatched with ${driver.driver_name}. ${d.destination_name} has been notified.`, driver);
+          // No SMS provider yet: send the link from this phone's own SMS app (or WhatsApp) instead.
+          if (r?.driver_link && driver.notify_driver && !config?.sms_live) {
+            await overlay.open((close) => <SendLinkDialog d={r} close={close} />);
+          }
         }}>
           <Truck size={20} /> Dispatch
         </button>,
@@ -588,7 +630,7 @@ function LiveTracking({ d }: { d: Doc }) {
   const km = tr.distance_left_m != null ? (tr.distance_left_m / 1000).toFixed(tr.distance_left_m < 10000 ? 1 : 0) : null;
   const stale = tr.last ? tr.last.seconds_ago > 120 : false;
   const link = tr.driver_link;
-  const message = link ? `StockFlow ${d.code}: please open this link and keep it open while you deliver to ${d.destination_name}: ${link}` : '';
+  const message = link ? driverMessage({ ...d, driver_link: link }) : '';
   const phone = d.driver_phone ? intlPhone(String(d.driver_phone)) : '';
 
   return (
@@ -628,7 +670,7 @@ function LiveTracking({ d }: { d: Doc }) {
                 </a>
               )}
               {phone && (
-                <a className="btn tonal small" href={`sms:+${phone}?body=${encodeURIComponent(message)}`}>
+                <a className="btn tonal small" href={smsHref(phone, message)}>
                   <MessageSquareText size={18} /> SMS
                 </a>
               )}

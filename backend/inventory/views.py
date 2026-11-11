@@ -414,7 +414,8 @@ class TransferViewSet(DocumentViewSet):
     def send_out(self, request, pk=None):
         """Body: {driver_name, driver_phone, vehicle_type, vehicle_reg, notify_driver}."""
         t = services.dispatch_transfer(self.get_object(), request.user, _driver_data(request.data))
-        if request.data.get("notify_driver", True) and t.driver_phone:
+        sms_live = settings.MESSAGING["SMS_BACKEND"] != "console"
+        if request.data.get("notify_driver", True) and t.driver_phone and sms_live:
             link = tracking_link(request, t)
             from messaging.gateways import send
 
@@ -642,6 +643,8 @@ def app_config(request):
         "google_maps_key": settings.GOOGLE_MAPS_API_KEY,
         "mpesa_prompt": mpesa.is_live() or settings.MPESA["BACKEND"] == "console",
         "mpesa_simulated": not mpesa.is_live(),
+        # False while no SMS provider is set up: the app then opens the phone's own SMS app instead.
+        "sms_live": settings.MESSAGING["SMS_BACKEND"] != "console",
         "vehicles": [{"value": v, "label": l} for v, l in Vehicle.choices],
         "email_reset": True,
     })
