@@ -137,8 +137,12 @@ EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
 EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
 EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
 EMAIL_TIMEOUT = 20
+# Render's free plan blocks SMTP, so on Render use Brevo's HTTPS API (BREVO_API_KEY) instead of Gmail SMTP.
+BREVO_API_KEY = env("BREVO_API_KEY", default="")
 EMAIL_BACKEND = env("EMAIL_BACKEND", default=(
-    "django.core.mail.backends.smtp.EmailBackend" if EMAIL_HOST_PASSWORD else "django.core.mail.backends.console.EmailBackend"))
+    "accounts.email_backend.BrevoEmailBackend" if BREVO_API_KEY
+    else "django.core.mail.backends.smtp.EmailBackend" if EMAIL_HOST_PASSWORD
+    else "django.core.mail.backends.console.EmailBackend"))
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default=f"StockFlow <{EMAIL_HOST_USER or 'no-reply@stockflow.local'}>")
 
 # M-Pesa (Safaricom Daraja STK push) ---------------------------------------------

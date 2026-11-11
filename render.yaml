@@ -40,6 +40,9 @@ services:
         value: StockFlow <vinwonder05@gmail.com>
       - key: EMAIL_HOST_PASSWORD
         sync: false
+      # Render's free plan blocks SMTP: emails go through Brevo's API when this key is set (Render dashboard)
+      - key: BREVO_API_KEY
+        sync: false
       # M-Pesa: console = test mode until you add Daraja keys (MPESA_BACKEND=daraja, MPESA_CONSUMER_KEY, …)
       - key: MPESA_BACKEND
         value: console
