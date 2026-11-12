@@ -85,6 +85,7 @@ function MemberSheet({ member, stores, close }: { member?: TeamMember; stores: L
   const [role, setRole] = useState<Role>((member?.role as Role) ?? 'staff');
   const [locations, setLocations] = useState<number[]>(member?.locations ?? []);
   const [password, setPassword] = useState('');
+  const [passwordConfirm, setPasswordConfirm] = useState('');
   const [active, setActive] = useState(member?.is_active ?? true);
   const [sms, setSms] = useState(member?.sms_alerts ?? false);
   const [busy, setBusy] = useState(false);
@@ -93,6 +94,7 @@ function MemberSheet({ member, stores, close }: { member?: TeamMember; stores: L
     if (!first.trim()) return overlay.error('Enter their first name.');
     if (!username.trim()) return overlay.error('Choose a username they will sign in with.');
     if (!member && password.length < 8) return overlay.error('Give them a password of at least 8 characters.');
+    if (password && password !== passwordConfirm) return overlay.error("The password entries don't match.");
     if (role !== 'admin' && locations.length === 0) return overlay.error('Choose at least one store they work in.');
     setBusy(true);
     try {
@@ -152,9 +154,14 @@ function MemberSheet({ member, stores, close }: { member?: TeamMember; stores: L
             </div>
           </Field>
         )}
-        <Field label={member ? 'New password (leave empty to keep)' : 'Password'}>
+        <Field label={member ? 'Change password (optional; leave empty to keep current)' : 'Set password'}>
           <PasswordInput value={password} onChange={setPassword} placeholder="8+ characters" autoComplete="new-password" />
         </Field>
+        {(!member || password) && (
+          <Field label="Confirm password">
+            <PasswordInput value={passwordConfirm} onChange={setPasswordConfirm} placeholder="Type the password again" autoComplete="new-password" />
+          </Field>
+        )}
         <Switch checked={sms} onChange={setSms} title="Important alerts by SMS too" subtitle="Approvals, arrivals, low stock" />
         {member && <Switch checked={active} onChange={setActive} title="Can sign in" subtitle="Switch off when someone leaves. Their history is kept." />}
       </div>

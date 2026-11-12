@@ -285,6 +285,7 @@ export interface LineDraft {
   variant: Variant;
   quantity: number;
   price: number;
+  cost: number;
   available?: number | null;
 }
 
@@ -292,6 +293,7 @@ export const newLine = (variant: Variant, available?: number | null, price?: num
   variant,
   quantity: 1,
   price: price ?? toD(variant.selling_price),
+  cost: toD(variant.cost_price),
   available,
 });
 

@@ -21,7 +21,10 @@ export const SIZE_PRESETS = [
   'Small', 'Medium', 'Large',
 ];
 
-export const COLOUR_PRESETS = ['White', 'Black', 'Grey', 'Silver', 'Red', 'Blue', 'Green', 'Maroon', 'Brown', 'Cream', 'Yellow', 'Orange', 'Clear'];
+export const COLOUR_PRESETS = [
+  'White', 'Black', 'Grey', 'Silver', 'Chrome', 'Stainless steel', 'Brass', 'Copper', 'Bronze', 'Gold',
+  'Galvanized', 'Red', 'Blue', 'Green', 'Maroon', 'Brown', 'Cream', 'Yellow', 'Orange', 'Clear',
+];
 
 /** <datalist> elements used by inputs with list="…": pick from the list or type freely. */
 export function PresetLists() {

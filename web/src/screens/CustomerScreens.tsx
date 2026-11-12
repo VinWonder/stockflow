@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { HandCoins, MessageCircle, MessageSquareText, Pencil, Phone, Search, Users } from 'lucide-react';
+import { HandCoins, MessageCircle, MessageSquareText, Pencil, Phone, Plus, Search, Users } from 'lucide-react';
 
 import { api } from '../lib/api';
 import { useMe } from '../lib/auth';
@@ -15,6 +15,8 @@ import { Dialog, useOverlay } from '../ui/overlay';
 /** Customers, with who owes money on credit and what is overdue. */
 export function CustomersScreen() {
   const navigate = useNavigate();
+  const overlay = useOverlay();
+  const qc = useQueryClient();
   const [owing, setOwing] = useState(true);
   const [term, setTerm] = useState('');
   const list = useCustomers(owing, term);
@@ -22,9 +24,24 @@ export function CustomersScreen() {
   const totalOwed = rows.reduce((s, c) => s + toD(c.owed), 0);
   const totalOverdue = rows.reduce((s, c) => s + toD(c.overdue), 0);
 
+  const addCustomer = async () => {
+    const form = await overlay.open<CustomerDraft>((close) => <CustomerForm close={close} />);
+    if (!form) return;
+    try {
+      await api.post('/customers/', form);
+      setOwing(false);
+      qc.invalidateQueries({ queryKey: ['customers'] });
+      overlay.success('Customer added.');
+    } catch (error) {
+      overlay.error(error);
+    }
+  };
+
   return (
     <main className="page">
-      <TopBar title="Customers & credit" back />
+      <TopBar title="Customers & credit" back>
+        <button className="icon-btn tonal" aria-label="Add customer" title="Add customer" onClick={addCustomer}><Plus size={20} /></button>
+      </TopBar>
       <Segmented<'owing' | 'all'>
         value={owing ? 'owing' : 'all'}
         onChange={(v) => setOwing(v === 'owing')}
@@ -46,7 +63,7 @@ export function CustomersScreen() {
         ) : list.isError ? (
           <ErrorView error={list.error} onRetry={() => list.refetch()} />
         ) : rows.length === 0 ? (
-          <EmptyState icon={owing ? HandCoins : Users} title={owing ? 'Nobody owes you money' : 'No customers yet'} message={owing ? 'Credit sales appear here until they are paid.' : 'Customers are saved when you sell on credit or enter a phone number.'} />
+          <EmptyState icon={owing ? HandCoins : Users} title={owing ? 'Nobody owes you money' : 'No customers yet'} message={owing ? 'Credit sales appear here until they are paid.' : 'Add customers here, or they will be saved when you sell on credit.'} action={!owing ? 'Add customer' : undefined} onAction={!owing ? addCustomer : undefined} />
         ) : (
           <div className="list">
             {rows.map((c) => (
@@ -68,6 +85,55 @@ export function CustomersScreen() {
         )}
       </div>
     </main>
+  );
+}
+
+interface CustomerDraft {
+  name: string;
+  phone: string;
+  credit_limit: string;
+  notes: string;
+}
+
+function CustomerForm({ customer, close }: { customer?: Customer; close: (value?: CustomerDraft) => void }) {
+  const overlay = useOverlay();
+  const [name, setName] = useState(customer?.name ?? '');
+  const [phone, setPhone] = useState(customer?.phone ? `0${customer.phone.slice(3)}` : '');
+  const [limit, setLimit] = useState(String(customer?.credit_limit ?? '0'));
+  const [notes, setNotes] = useState(customer?.notes ?? '');
+
+  const submit = () => {
+    if (!name.trim()) return overlay.error('Enter the customer name.');
+    if (toD(limit) < 0) return overlay.error('Credit limit cannot be negative.');
+    close({ name: name.trim(), phone: phone.trim(), credit_limit: toD(limit).toFixed(2), notes: notes.trim() });
+  };
+
+  return (
+    <Dialog
+      onClose={() => close()}
+      title={customer ? 'Edit customer details' : 'Add customer'}
+      actions={
+        <>
+          <button className="btn text" onClick={() => close()}>Cancel</button>
+          <button className="btn small" onClick={submit}>{customer ? 'Save details' : 'Add customer'}</button>
+        </>
+      }
+    >
+      <div className="stack">
+        <Field label="Customer name">
+          <input className="input" autoFocus={!customer} autoCapitalize="words" value={name} onChange={(event) => setName(event.target.value)} />
+        </Field>
+        <Field label="Phone (optional)">
+          <input className="input" type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} />
+        </Field>
+        <Field label="Credit limit (KES; 0 means no limit)">
+          <input className="input" inputMode="decimal" value={limit} onChange={(event) => setLimit(numericInput(event.target.value))} />
+        </Field>
+        <Field label="Notes (optional)">
+          <textarea className="input" rows={3} value={notes} onChange={(event) => setNotes(event.target.value)} />
+        </Field>
+      </div>
+    </Dialog>
   );
 }
 
@@ -106,25 +172,6 @@ function PaymentDialog({ sale, close }: { sale: Sale; close: (v?: { amount: stri
   );
 }
 
-function LimitDialog({ customer, close }: { customer: Customer; close: (v?: string) => void }) {
-  const [limit, setLimit] = useState(String(Math.round(toD(customer.credit_limit))));
-  return (
-    <Dialog
-      onClose={() => close()}
-      title="Credit limit"
-      actions={
-        <>
-          <button className="btn text" onClick={() => close()}>Cancel</button>
-          <button className="btn small" onClick={() => close(limit)}>Save</button>
-        </>
-      }
-    >
-      <p className="small" style={{ marginTop: 0 }}>The most {customer.name} may owe at any time. 0 means no limit.</p>
-      <input className="input" autoFocus inputMode="decimal" value={limit} onChange={(e) => setLimit(numericInput(e.target.value))} />
-    </Dialog>
-  );
-}
-
 export function CustomerScreen({ id }: { id: number }) {
   const me = useMe();
   const overlay = useOverlay();
@@ -148,13 +195,14 @@ export function CustomerScreen({ id }: { id: number }) {
     }
   };
 
-  const editLimit = async (c: Customer) => {
-    const v = await overlay.open<string>((close) => <LimitDialog customer={c} close={close} />);
-    if (v == null) return;
+  const editDetails = async (c: Customer) => {
+    const form = await overlay.open<CustomerDraft>((close) => <CustomerForm customer={c} close={close} />);
+    if (!form) return;
     try {
-      await api.patch(`/customers/${c.id}/`, { credit_limit: toD(v).toFixed(2) });
+      await api.patch(`/customers/${c.id}/`, form);
       qc.invalidateQueries({ queryKey: ['customer', id] });
       qc.invalidateQueries({ queryKey: ['customers'] });
+      overlay.success('Customer details saved.');
     } catch (e) {
       overlay.error(e);
     }
@@ -189,11 +237,16 @@ export function CustomerScreen({ id }: { id: number }) {
               )}
             </>
           )}
+          {me.is_admin && (
+            <button className="icon-btn tonal" aria-label="Edit customer details" title="Edit customer details" onClick={() => editDetails(c)}>
+              <Pencil size={18} />
+            </button>
+          )}
         </div>
         <div className="row small" style={{ marginTop: 10 }}>
           <span className="grow">Credit limit: <b>{toD(c.credit_limit) > 0 ? money(c.credit_limit) : 'none'}</b></span>
-          {me.is_admin && <button className="btn text" onClick={() => editLimit(c)}><Pencil size={16} /> Change</button>}
         </div>
+        {c.notes && <p className="small muted" style={{ margin: '10px 0 0' }}>{c.notes}</p>}
       </Card>
 
       <SectionTitle>Unpaid ({open.length})</SectionTitle>

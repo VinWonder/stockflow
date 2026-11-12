@@ -608,9 +608,13 @@ class StockRequestSerializer(SameBusinessMixin, LineMixin, serializers.ModelSeri
 
 
 class SaleLineSerializer(DocLineSerializer):
+    unit_cost = serializers.DecimalField(
+        max_digits=14, decimal_places=2, min_value=Decimal("0"), required=False, write_only=True,
+    )
+
     class Meta:
         model = SaleLine
-        fields = ["id", "variant", "variant_label", "sku", "unit", "quantity", "unit_price"]
+        fields = ["id", "variant", "variant_label", "sku", "unit", "quantity", "unit_price", "unit_cost"]
         extra_kwargs = {"unit_price": {"required": False}}
 
 
@@ -679,7 +683,10 @@ class SaleSerializer(SameBusinessMixin, LineMixin, serializers.ModelSerializer):
         sale = Sale.objects.create(**data)
         SaleLine.objects.bulk_create([
             SaleLine(sale=sale, unit_price=l.get("unit_price", l["variant"].selling_price),
-                     **{k: v for k, v in l.items() if k != "unit_price"}) for l in lines])
+                     unit_cost=l.get("unit_cost", l["variant"].cost_price),
+                     **{k: v for k, v in l.items() if k not in ("unit_price", "unit_cost")})
+            for l in lines
+        ])
         return sale
 
 

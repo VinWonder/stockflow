@@ -9,12 +9,13 @@ import { Card } from './common';
 export type PriceMode = 'none' | 'cost' | 'sell';
 
 /** Editable list of products with quantity steppers and optional price, used by every form. */
-export function LinesEditor({ lines, onChange, onAdd, priceMode = 'none', checkAvailable = false, addLabel = 'Add product' }: {
+export function LinesEditor({ lines, onChange, onAdd, priceMode = 'none', checkAvailable = false, showCost = false, addLabel = 'Add product' }: {
   lines: LineDraft[];
   onChange: (lines: LineDraft[]) => void;
   onAdd: () => void;
   priceMode?: PriceMode;
   checkAvailable?: boolean;
+  showCost?: boolean;
   addLabel?: string;
 }) {
   const update = (i: number, patch: Partial<LineDraft>) => onChange(lines.map((l, j) => (j === i ? { ...l, ...patch } : l)));
@@ -26,6 +27,7 @@ export function LinesEditor({ lines, onChange, onAdd, priceMode = 'none', checkA
           line={line}
           priceMode={priceMode}
           checkAvailable={checkAvailable}
+          showCost={showCost}
           onChange={(patch) => update(i, patch)}
           onRemove={() => onChange(lines.filter((_, j) => j !== i))}
         />
@@ -37,16 +39,18 @@ export function LinesEditor({ lines, onChange, onAdd, priceMode = 'none', checkA
   );
 }
 
-function LineTile({ line, priceMode, checkAvailable, onChange, onRemove }: {
+function LineTile({ line, priceMode, checkAvailable, showCost, onChange, onRemove }: {
   line: LineDraft;
   priceMode: PriceMode;
   checkAvailable: boolean;
+  showCost: boolean;
   onChange: (patch: Partial<LineDraft>) => void;
   onRemove: () => void;
 }) {
   const v = line.variant;
   const [qtyText, setQtyText] = useState(qtyOut(line.quantity));
   const [priceText, setPriceText] = useState(qtyOut(line.price));
+  const [costText, setCostText] = useState(qtyOut(line.cost));
 
   // Keep the box in sync when the quantity changes from outside (e.g. the same product added again).
   useEffect(() => {
@@ -116,13 +120,36 @@ function LineTile({ line, priceMode, checkAvailable, onChange, onRemove }: {
           {over ? `Only ${qty(line.available)} available` : `${qty(line.available)} ${v.unit} in this store`}
         </div>
       )}
+      {showCost && (
+        <label className="field" style={{ maxWidth: 180, marginTop: 8 }}>
+          <span style={{ margin: '0 0 2px 4px' }}>Buying cost each (optional)</span>
+          <input
+            className="input"
+            style={{ minHeight: 40, padding: '8px 10px' }}
+            inputMode="decimal"
+            value={costText}
+            onFocus={(e) => e.target.select()}
+            onChange={(e) => {
+              const t = numericInput(e.target.value);
+              setCostText(t);
+              onChange({ cost: parseFloat(t) || 0 });
+            }}
+          />
+        </label>
+      )}
       {priceMode !== 'none' && <div className="tiny muted" style={{ marginTop: 4 }}>Line total: {money(line.quantity * line.price)}</div>}
+      {showCost && <div className="tiny muted" style={{ marginTop: 4 }}>Defaults to the current buying cost. An adjustment affects this sale only.</div>}
     </Card>
   );
 }
 
 /** Lines in the format the API expects. */
-export const linesPayload = (lines: LineDraft[], priceField?: 'unit_cost' | 'unit_price') =>
+export const linesPayload = (lines: LineDraft[], priceField?: 'unit_cost' | 'unit_price', includeSaleCost = false) =>
   lines
     .filter((l) => l.quantity > 0)
-    .map((l) => ({ variant: l.variant.id, quantity: qtyOut(l.quantity), ...(priceField ? { [priceField]: l.price.toFixed(2) } : {}) }));
+    .map((l) => ({
+      variant: l.variant.id,
+      quantity: qtyOut(l.quantity),
+      ...(priceField ? { [priceField]: l.price.toFixed(2) } : {}),
+      ...(includeSaleCost ? { unit_cost: l.cost.toFixed(2) } : {}),
+    }));

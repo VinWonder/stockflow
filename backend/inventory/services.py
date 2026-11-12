@@ -193,17 +193,13 @@ def _check_driver(transfer: Transfer):
     _require(transfer.driver_name.strip(), "Enter the name of the person taking the goods.", "driver_required")
     _require(len(transfer.driver_phone) >= 12, "Enter the driver's phone number (e.g. 0712 345 678).", "driver_required")
     _require(transfer.vehicle_type in Vehicle.values, "Choose how the goods are travelling (tuk-tuk, motorbike …).", "driver_required")
-    if transfer.vehicle_type in MOTOR_VEHICLES:
-        _require(len(transfer.vehicle_reg.replace(" ", "")) >= 5,
-                 f"Enter the {transfer.get_vehicle_type_display().lower()}'s number plate (e.g. KMEA 123B).", "driver_required")
 
 
 @transaction.atomic
 def dispatch_transfer(transfer: Transfer, user, driver: dict | None = None):
     """Goods physically leave the source: stock goes down there and is 'on the way'.
 
-    The driver's name and phone and the vehicle (tuk-tuk / motorbike number plate) are required here,
-    so every load on the road can be traced to a person and a vehicle.
+    The driver's name, phone and vehicle type are required. The vehicle registration is optional.
     """
     transfer = Transfer.objects.select_for_update().get(pk=transfer.pk)
     _require(transfer.status == Transfer.Status.APPROVED, "Only approved transfers can be dispatched.")
@@ -469,8 +465,8 @@ def post_sale(sale: Sale, user, mpesa_payment_id=None, deposit=None):
         if customer.credit_limit > 0:
             owed = customer.outstanding(exclude_sale=sale)
             _require(owed + total - deposit <= customer.credit_limit,
-                     f"{customer.name} already owes KES {owed:,.0f} and the credit limit is KES {customer.credit_limit:,.0f}. "
-                     "Take a bigger deposit or collect the old debt first.", "credit_limit")
+                     f"This sale would exceed {customer.name}'s credit limit. "
+                     "Take a bigger deposit or update the credit limit.", "credit_limit")
         sale.amount_paid = deposit
         sale.due_date = sale.due_date or (timezone.localdate() + timedelta(days=14))
         paid_with = Sale.Payment.CASH
@@ -506,8 +502,6 @@ def post_sale(sale: Sale, user, mpesa_payment_id=None, deposit=None):
 
     levels = _lock_levels([(sale.location_id, l.variant_id) for l in lines])
     for line in lines:
-        line.unit_cost = line.variant.cost_price
-        line.save(update_fields=["unit_cost"])
         _apply(levels[(sale.location_id, line.variant_id)], -line.quantity, K.SALE, sale.code, user, line.unit_cost)
     sale.save(update_fields=["amount_paid", "due_date", "payment_reference", "updated_at"])
     if sale.amount_paid > 0:

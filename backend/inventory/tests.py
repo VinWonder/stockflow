@@ -63,15 +63,16 @@ class StockFlowTests(TestCase):
         self.assertTrue(t.has_discrepancy)
         self.assertTrue(Notification.objects.filter(user=self.admin, title__contains="short").exists())
 
-    def test_dispatch_needs_driver_and_number_plate(self):
+    def test_dispatch_needs_driver_but_number_plate_is_optional(self):
         t = Transfer.objects.create(source=self.gdn, destination=self.shp2, created_by=self.admin, status="approved")
         TransferLine.objects.create(transfer=t, variant=self.cement, quantity=1)
         with self.assertRaises(StockError):
             services.dispatch_transfer(t, self.admin, {})
-        with self.assertRaises(StockError):  # motorbike without a plate
-            services.dispatch_transfer(t, self.admin, {**DRIVER, "vehicle_type": "motorbike", "vehicle_reg": ""})
-        services.dispatch_transfer(t, self.admin, {**DRIVER, "vehicle_type": "handcart", "vehicle_reg": ""})
-        self.assertEqual(qty(self.gdn, self.cement), D(49))
+        services.dispatch_transfer(t, self.admin, {**DRIVER, "vehicle_type": "motorbike", "vehicle_reg": ""})
+        t2 = Transfer.objects.create(source=self.gdn, destination=self.shp2, created_by=self.admin, status="approved")
+        TransferLine.objects.create(transfer=t2, variant=self.cement, quantity=1)
+        services.dispatch_transfer(t2, self.admin, {**DRIVER, "vehicle_type": "handcart", "vehicle_reg": ""})
+        self.assertEqual(qty(self.gdn, self.cement), D(48))
 
     def test_live_tracking_by_driver_link_and_arrival_alert(self):
         t = Transfer.objects.create(source=self.gdn, destination=self.main, created_by=self.admin, status="approved")
@@ -185,6 +186,22 @@ class StockFlowTests(TestCase):
         r = self.api.post("/api/sales/", {"location": self.gdn.id, "lines": [{"variant": self.cement.id, "quantity": "1"}]}, format="json")
         self.assertEqual(r.status_code, 201, r.data)
 
+    def test_sale_buying_cost_override_only_applies_to_that_sale(self):
+        self.api.force_authenticate(self.admin)
+        default_cost = self.cement.cost_price
+        response = self.api.post("/api/sales/", {
+            "location": self.main.id,
+            "payment_method": "cash",
+            "lines": [{"variant": self.cement.id, "quantity": "1", "unit_cost": "123.45"}],
+        }, format="json")
+        self.assertEqual(response.status_code, 201, response.data)
+        sale = Sale.objects.get(pk=response.data["id"])
+        self.assertEqual(sale.lines.get().unit_cost, D("123.45"))
+        self.cement.refresh_from_db()
+        self.assertEqual(self.cement.cost_price, default_cost)
+        movement = StockMovement.objects.get(reference=sale.code, kind=StockMovement.Kind.SALE)
+        self.assertEqual(movement.unit_cost, D("123.45"))
+
     def test_mpesa_code_is_checked_and_cannot_be_reused(self):
         self.api.force_authenticate(self.admin)
         body = {"location": self.main.id, "payment_method": "mpesa", "lines": [{"variant": self.cement.id, "quantity": "1"}]}
@@ -236,6 +253,20 @@ class StockFlowTests(TestCase):
         dash = self.api.get("/api/dashboard/").data["totals"]
         self.assertEqual(D(dash["sales_today"]), D(1700))
         self.assertEqual(D(dash["profit_today"]), D(1700) - 2 * self.cement.cost_price)
+
+    def test_customer_can_be_created_with_contact_and_credit_details(self):
+        self.api.force_authenticate(self.admin)
+        response = self.api.post("/api/customers/", {
+            "name": "Plumbing Customer",
+            "phone": "0712345678",
+            "credit_limit": "25000.00",
+            "notes": "Prefers WhatsApp",
+        }, format="json")
+        self.assertEqual(response.status_code, 201, response.data)
+        customer = Customer.objects.get(pk=response.data["id"])
+        self.assertEqual(customer.phone, "254712345678")
+        self.assertEqual(customer.credit_limit, D("25000.00"))
+        self.assertEqual(customer.notes, "Prefers WhatsApp")
 
     def test_idempotent_create(self):
         self.api.force_authenticate(self.admin)

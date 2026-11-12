@@ -64,7 +64,7 @@ export function DriverFields({ value, onChange }: { value: DriverDraft; onChange
         </div>
       </Field>
       {isMotor(value.vehicle_type) && (
-        <Field label="Number plate">
+        <Field label="Number plate (optional)">
           <input
             className="input"
             autoCapitalize="characters"
@@ -83,7 +83,6 @@ function driverProblem(d: DriverDraft): string | null {
   if (!d.driver_name.trim()) return 'Enter the name of the person taking the goods.';
   if (digits(d.driver_phone).length < 9) return "Enter the driver's phone number.";
   if (!d.vehicle_type) return 'Choose how the goods are travelling.';
-  if (isMotor(d.vehicle_type) && d.vehicle_reg.replace(/\s/g, '').length < 5) return 'Enter the number plate.';
   return null;
 }
 
@@ -317,7 +316,7 @@ function DispatchSheet({ d, close }: { d: Doc; close: (v?: DriverDraft & { notif
     vehicle_type: d.vehicle_type ?? '',
     vehicle_reg: d.vehicle_reg ?? '',
   });
-  const [notify, setNotify] = useState(true);
+  const [notify, setNotify] = useState(false);
   return (
     <Sheet onClose={() => close()} title={`Dispatch ${d.code}`} tall>
       <div className="sheet-body stack" style={{ flex: 1 }}>
@@ -329,8 +328,8 @@ function DispatchSheet({ d, close }: { d: Doc; close: (v?: DriverDraft & { notif
         <DriverFields value={driver} onChange={setDriver} />
         <label className="switch-row">
           <div className="col grow">
-            <span className="bold">Send the tracking link to the driver</span>
-            <span className="small muted">Opens your phone's SMS app with the link ready. The driver taps it so you can follow the goods on the map.</span>
+            <span className="bold">Send tracking link to the driver (optional)</span>
+            <span className="small muted">When enabled, send by SMS if configured, or open a share prompt after dispatch.</span>
           </div>
           <input type="checkbox" hidden checked={notify} onChange={(e) => setNotify(e.target.checked)} />
           <span className={`switch${notify ? ' on' : ''}`} aria-hidden="true" />

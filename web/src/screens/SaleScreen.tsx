@@ -8,7 +8,7 @@ import { apiDate, money, numericInput, qty, toD, uuid } from '../lib/format';
 import { newLine, type Customer, type Json, type LineDraft, type Location, type StockLevel } from '../lib/models';
 import { LIVE_MS, useConfig, useCustomers, useLocations, useRefreshEverything } from '../lib/queries';
 import { alpha, colors } from '../lib/theme';
-import { BottomActions, Card, Field, Pill, SectionTitle, Segmented, Spinner, TopBar } from '../ui/common';
+import { BottomActions, Card, Field, SectionTitle, Segmented, Spinner, TopBar } from '../ui/common';
 import { LinesEditor, linesPayload } from '../ui/LinesEditor';
 import { Dialog, Sheet, useConfirm, useOverlay } from '../ui/overlay';
 import { LocationField, usePickLocation, usePickVariant } from '../ui/pickers';
@@ -186,7 +186,7 @@ export function SaleScreen({ locationId }: { locationId: number | null }) {
         discount: toD(discount).toFixed(2),
         deposit: payment === 'credit' ? toD(deposit).toFixed(2) : undefined,
         due_date: payment === 'credit' ? due : undefined,
-        lines: linesPayload(cart, 'unit_price'),
+        lines: linesPayload(cart, 'unit_price', true),
       });
       refresh();
       await overlay.open((close) => (
@@ -223,7 +223,7 @@ export function SaleScreen({ locationId }: { locationId: number | null }) {
         </Card>
       )}
       <SectionTitle>Cart</SectionTitle>
-      <LinesEditor lines={cart} onChange={setCart} onAdd={add} priceMode="sell" checkAvailable addLabel="Add item" />
+      <LinesEditor lines={cart} onChange={setCart} onAdd={add} priceMode="sell" checkAvailable showCost addLabel="Add item" />
 
       <SectionTitle>Payment</SectionTitle>
       <div className="stack">
@@ -303,7 +303,7 @@ export function SaleScreen({ locationId }: { locationId: number | null }) {
               <div className="col grow">
                 <span className="bold">{customer ? customer.name : 'Choose a regular customer'}</span>
                 <span className="small muted">
-                  {customer ? `Owes ${money(customer.owed)}${limit > 0 ? ` · limit ${money(limit)}` : ' · no limit'}` : 'or type a new customer below'}
+                  {customer ? (limit > 0 ? `Credit limit ${money(limit)}` : 'Regular customer') : 'or type a new customer below'}
                 </span>
               </div>
             </button>
@@ -329,7 +329,6 @@ export function SaleScreen({ locationId }: { locationId: number | null }) {
               {overLimit && <TriangleAlert size={18} />}
               <span className="grow">
                 {total > 0 ? `${money(total - toD(deposit))} goes on credit` : ''}
-                {customer && total > 0 ? `; total owed becomes ${money(creditAfter)}` : ''}
                 {overLimit ? `, over the ${money(limit)} limit. Take a bigger deposit.` : '.'}
               </span>
             </div>
@@ -486,7 +485,6 @@ function CustomerSheet({ close }: { close: (c?: Customer | 'new') => void }) {
               <span className="bold">{c.name}</span>
               <span className="small muted">{c.phone ? `+${c.phone}` : 'No phone'}</span>
             </div>
-            {toD(c.owed) > 0 && <Pill text={`owes ${money(c.owed)}`} color={toD(c.overdue) > 0 ? colors.danger : colors.amber} />}
           </button>
         ))}
       </div>
