@@ -209,6 +209,7 @@ export function SignupScreen() {
         {step === 3 && (
           <div className="stack">
             <p className="small" style={{ margin: 0 }}>Add the other shops and godowns you have. You can add more, set their map positions and add staff later.</p>
+            <p className="small muted" style={{ margin: 0 }}>After creating your account and signing in, set up a six-digit app PIN and optional fingerprint unlock from More → App unlock.</p>
             {stores.map((s, i) => (
               <div key={i} className="card" style={{ padding: 12, background: 'var(--bg)' }}>
                 <div className="row" style={{ gap: 8 }}>

@@ -23,6 +23,7 @@ import { CustomerScreen, CustomersScreen } from './screens/CustomerScreens';
 import { ProductsScreen } from './screens/ProductsScreen';
 import { TeamScreen } from './screens/TeamScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
+import { AppUnlockScreen, AppUnlockSetupScreen } from './screens/AppUnlockScreen';
 
 const num = (v: string | null | undefined) => (v && /^\d+$/.test(v) ? Number(v) : null);
 
@@ -45,6 +46,7 @@ export function App() {
       </div>
     );
   }
+  if (status === 'locked') return <AppUnlockScreen />;
   // Signed out: sign-up and the driver's tracking page work without an account; anything else asks to sign in.
   if (status === 'signedOut') {
     return (
@@ -101,6 +103,7 @@ export function App() {
       <Route path="/products" element={<ProductsScreen />} />
       <Route path="/team" element={<TeamScreen />} />
       <Route path="/settings" element={<SettingsScreen />} />
+      <Route path="/app-unlock" element={<AppUnlockSetupScreen />} />
       <Route path="/signup" element={<Navigate to="/" replace />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

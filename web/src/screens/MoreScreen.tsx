@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowDownLeft, ArrowLeftRight, Boxes, Building2, ChevronRight, HandCoins, LogOut, MessageSquareText, Moon, PackageMinus,
-  ShoppingCart, Store, Truck, TriangleAlert, UserCog, Users, type LucideIcon,
+  Fingerprint, ShoppingCart, Store, Truck, TriangleAlert, UserCog, Users, type LucideIcon,
 } from 'lucide-react';
 
 import { useAuth, useMe } from '../lib/auth';
@@ -16,7 +16,7 @@ type Item = { icon: LucideIcon; label: string; to: string; hint?: string; show?:
 
 export function MoreScreen() {
   const me = useMe();
-  const { logout } = useAuth();
+  const { logout, appUnlockEnabled, biometricEnabled } = useAuth();
   const navigate = useNavigate();
   const confirm = useConfirm();
   const [mode, setMode] = useState<ThemeMode>(getThemeMode);
@@ -85,6 +85,18 @@ export function MoreScreen() {
 
       <SectionTitle>App</SectionTitle>
       <Card className="group">
+        <button className="tile" onClick={() => navigate('/app-unlock')}>
+          <Fingerprint size={22} color="var(--primary)" />
+          <div className="col grow">
+            <span style={{ fontWeight: 600 }}>App unlock</span>
+            <span className="small muted">
+              {appUnlockEnabled
+                ? (biometricEnabled ? 'Six-digit PIN and biometrics enabled' : 'Six-digit PIN enabled')
+                : 'Set up a PIN and optional biometrics'}
+            </span>
+          </div>
+          <ChevronRight size={20} />
+        </button>
         <label className="tile" style={{ cursor: 'default' }}>
           <Moon size={22} />
           <span className="grow">Appearance</span>

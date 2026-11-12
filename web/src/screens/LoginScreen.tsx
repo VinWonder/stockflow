@@ -57,7 +57,9 @@ export function LoginScreen() {
   const navigate = useNavigate();
   const arrived = (useLocation().state ?? {}) as { signedUp?: boolean; login?: string };
   const [mode, setMode] = useState<'login' | 'forgot'>('login');
-  const [notice, setNotice] = useState(arrived.signedUp ? 'Your account is ready. Sign in with your email and password.' : '');
+  const [notice, setNotice] = useState(arrived.signedUp
+    ? 'Your account is ready. Sign in, then open More → App unlock to set a six-digit PIN and optional biometrics for this device.'
+    : '');
   const [username, setUsername] = useState(arrived.login ?? '');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);

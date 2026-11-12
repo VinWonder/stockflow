@@ -29,6 +29,11 @@ From the app the owner then adds **products & prices** (sizes, colours, buying a
 Users sign in with their username **or** email. **Forgot password?** emails a 6-digit code (valid 15 minutes, 5 tries)
 from the Gmail account in `EMAIL_HOST_USER`; see [Email](#email-forgot-password-codes-gmail) below.
 
+After creating an account and signing in, open **More → App unlock** to set a six-digit PIN and optionally enable
+the device's fingerprint or other platform biometric. Existing users can configure it there too. The PIN is a
+device-local fallback; it does not replace the account password for signing in on another device or account recovery.
+Biometric unlock requires a supported platform authenticator and a secure HTTPS origin.
+
 Hardware has no barcodes, so products are always found by **name, size and colour** (the camera scanner was removed).
 
 ## How it works (read this first)
